@@ -36,7 +36,7 @@ export const MINIMAX_STATUS_TIMEOUT_MS = 3_000
 export type MiniMaxStatusRegion = 'cn' | 'global'
 
 /** 登录态分类。与 `auth.ts` 的 `MiniMaxLoginState` 一一对应。 */
-export type MiniMaxStatusLoginState = 'ready' | 'anonymous' | 'missing' | 'expired' | 'error'
+export type MiniMaxStatusLoginState = 'ready' | 'authorizing' | 'anonymous' | 'missing' | 'expired' | 'error'
 
 /** 凭据来源。 */
 export type MiniMaxStatusLoginSource = 'lease' | 'file' | 'none'
@@ -48,6 +48,10 @@ export interface MiniMaxStatusLogin {
   generation?: number
   expiresAtMs?: number
   detail?: string
+  /** 设备码登录的用户码（`authorizing` 时可用）。 */
+  userCode?: string
+  /** 设备码登录的授权地址（`authorizing` 时可用）。 */
+  verificationUri?: string
 }
 
 /** 卡片要展示的模型行。 */
@@ -99,6 +103,8 @@ export interface MiniMaxStatusAuth {
     expiresAtMs?: number | undefined
     region?: MiniMaxStatusRegion | undefined
     detail?: string | undefined
+    userCode?: string | undefined
+    verificationUri?: string | undefined
   }>
   readonly region: MiniMaxStatusRegion
   readonly regionLabel: string

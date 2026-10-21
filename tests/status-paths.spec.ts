@@ -169,3 +169,28 @@ describe('formatContextWindow', () => {
     expect(formatContextWindow(Number.NaN)).toBe('—')
   })
 })
+
+describe('authorizing 登录态', () => {
+  it('保留等待授权状态，并透出验证码与授权地址', () => {
+    const view = toStatusView({
+      ok: true,
+      login: {
+        state: 'authorizing',
+        source: 'lease',
+        generation: 6,
+        userCode: 'KQZR-R2M7',
+        verificationUri: 'https://account.minimax.cn/oauth-authorize?user_code=KQZR-R2M7',
+      },
+      models: [],
+    })
+    expect(view.login.state).toBe('authorizing')
+    expect(view.login.userCode).toBe('KQZR-R2M7')
+    expect(view.login.verificationUri).toContain('user_code=KQZR-R2M7')
+  })
+
+  it('缺字段时退化成空，不把整份文档弄坏', () => {
+    const view = toStatusView({ ok: true, login: { state: 'authorizing', source: 'file' }, models: [] })
+    expect(view.login.state).toBe('authorizing')
+    expect(view.login.userCode).toBeUndefined()
+  })
+})

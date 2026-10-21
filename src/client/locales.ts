@@ -23,6 +23,7 @@ export const en = {
 
   'login.label': 'Sign-in',
   'login.ready': 'Signed in',
+  'login.authorizing': 'Awaiting approval',
   'login.anonymous': 'Sign-in required',
   'login.missing': 'No local login found',
   'login.expired': 'Sign-in expired',
@@ -42,6 +43,8 @@ export const en = {
   'advice.readyLease': 'Signed in. MiniMax Code provides the credential and refreshes it for you.',
   'advice.readyFile': 'Signed in. MiniMax Code is not running, so the plugin is reading the local credential file instead.',
   'advice.signInRequired': 'Not signed in: open MiniMax Code and sign in there. This plugin follows that sign-in.',
+  'advice.authorizing': 'MiniMax Code is signing in and waiting for your approval. Finish the device-code prompt in MiniMax Code (or open the link below), then reload this card.',
+  'advice.authorizingCode': 'Code {code}',
   'advice.expired': 'The sign-in expired: sign in again in MiniMax Code.',
 
   'promise.noApiKey': 'This plugin never reads, asks for, or stores an API key — the credential always comes from the local sign-in.',
@@ -84,6 +87,7 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
 
   'login.label': '登录态',
   'login.ready': '已登录',
+  'login.authorizing': '等待授权',
   'login.anonymous': '需要登录',
   'login.missing': '未找到本机登录',
   'login.expired': '登录已过期',
@@ -103,6 +107,8 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'advice.readyLease': '已登录。凭据由 MiniMax Code 提供，并由它自动续期。',
   'advice.readyFile': '已登录。MiniMax Code 没有在运行，插件改为读取本地凭据文件。',
   'advice.signInRequired': '尚未登录：请打开 MiniMax Code 并在那里登录，本插件会自动跟随该登录。',
+  'advice.authorizing': 'MiniMax Code 正在登录、等你完成授权。请在 MiniMax Code 里完成设备码授权（或打开下面的链接），然后刷新这张卡片。',
+  'advice.authorizingCode': '验证码 {code}',
   'advice.expired': '登录已过期：请在 MiniMax Code 中重新登录。',
 
   'promise.noApiKey': '本插件不读取、不索取、也不保存任何 API Key —— 凭据始终来自本机登录态。',

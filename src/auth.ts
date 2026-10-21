@@ -35,9 +35,14 @@ const BROKER_AUTHENTICATED = 'authenticated'
 const BROKER_REFRESHING = 'refreshing'
 const BROKER_ANONYMOUS = 'anonymous'
 const BROKER_EXPIRED = 'expired'
+/**
+ * 设备码授权进行中：用户在 MiniMax Code 里点了登录，还没在浏览器完成授权。
+ * `auth-state.json` 的 `authorization` 块会带上 `userCode` 与授权地址。
+ */
+const BROKER_AUTHORIZING = 'authorizing'
 
-/** 登录态分类。 */
-export type MiniMaxLoginState = 'ready' | 'anonymous' | 'missing' | 'expired' | 'error'
+/** 登录态分类。`authorizing` 表示 MiniMax Code 正在等用户在浏览器里完成授权。 */
+export type MiniMaxLoginState = 'ready' | 'authorizing' | 'anonymous' | 'missing' | 'expired' | 'error'
 
 /** 给状态卡片 / adapter 的登录态快照。 */
 export interface MiniMaxLoginStatus {
@@ -47,6 +52,10 @@ export interface MiniMaxLoginStatus {
   expiresAtMs?: number
   region: MiniMaxRegion
   detail?: string
+  /** 设备码登录的用户码（`authorizing` 时可用）。 */
+  userCode?: string
+  /** 设备码登录的授权地址（`authorizing` 时可用）。 */
+  verificationUri?: string
 }
 
 /** 取不到可用凭据。`status` 附带当次探测结果，便于卡片直接展示。 */
@@ -247,6 +256,17 @@ export class MiniMaxAuth {
     if (status.status === BROKER_EXPIRED) {
       return { ...base, state: 'expired', detail: 'MiniMax Code 登录态已过期，请重新登录。' }
     }
+    if (status.status === BROKER_AUTHORIZING) {
+      const pending = this.readPendingAuthorization()
+      return {
+        ...base,
+        state: 'authorizing',
+        detail: pending === undefined
+          ? 'MiniMax Code 正在登录，请完成授权。'
+          : 'MiniMax Code 正在等你完成登录授权。',
+        ...pending ?? {},
+      }
+    }
     return { ...base, state: 'error', detail: `MiniMax Code 登录态为 ${status.status}。` }
   }
 
@@ -267,6 +287,16 @@ export class MiniMaxAuth {
         source: 'none',
         region,
         detail: '未找到 MiniMax Code 登录态，请先打开 MiniMax Code 并登录。',
+      })
+    }
+    if (state?.status === BROKER_AUTHORIZING) {
+      const pending = this.readPendingAuthorization()
+      return withBroker({
+        state: 'authorizing',
+        source: state === undefined ? 'none' : 'file',
+        region,
+        detail: 'MiniMax Code 正在等你完成登录授权。',
+        ...pending ?? {},
       })
     }
     if (state?.status === BROKER_ANONYMOUS) {
@@ -300,6 +330,27 @@ export class MiniMaxAuth {
       })
     }
     return withBroker(base)
+  }
+
+  /**
+   * 读出设备码登录的待授权信息。
+   *
+   * mcode 在 `auth-state.json` 里写 `authorization.{userCode,verificationUri,verificationUriComplete}`，
+   * 这是**唯一**能把"去哪个地址、填哪个码"告诉用户的来源；broker 的 `status` 不带这些字段。
+   * 读不到就返回 `undefined`，卡片退化成一句话提示。
+   */
+  private readPendingAuthorization(): { userCode?: string; verificationUri?: string } | undefined {
+    const state = this.readAuthStateSync()
+    if (state?.status !== BROKER_AUTHORIZING) return undefined
+    const authorization = isRecord(state['authorization']) ? state['authorization'] : undefined
+    const userCode = readString(authorization, 'userCode')
+    const verificationUri = readString(authorization, 'verificationUriComplete')
+      ?? readString(authorization, 'verificationUri')
+    if (userCode === undefined && verificationUri === undefined) return undefined
+    return {
+      ...userCode === undefined ? {} : { userCode },
+      ...verificationUri === undefined ? {} : { verificationUri },
+    }
   }
 
   /** `auth-state.json` 的同步读取（构造期判区域 + inspect 用）。 */
@@ -363,7 +414,10 @@ function describeError(error: unknown): string {
 function unavailableMessage(status: MiniMaxLoginStatus): string {
   const detail = status.detail?.trim()
   const head = '取不到可用的 MiniMax 登录态'
-  return detail ? `${head}：${detail}` : head
+  const hint = status.userCode === undefined
+    ? ''
+    : `（验证码 ${status.userCode}${status.verificationUri === undefined ? '' : `，打开 ${status.verificationUri}`}）`
+  return detail ? `${head}：${detail}${hint}` : `${head}${hint}`
 }
 
 /**

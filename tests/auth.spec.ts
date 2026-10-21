@@ -99,7 +99,7 @@ function encodeFrame(value: unknown): Buffer {
 /** 起一个只回 lease/status 的假 broker；`expiresAtMs` 可推后/推前以模拟不同寿命。 */
 async function startBroker(
   dataDir: string,
-  options: { accessToken?: string; expiresAtMs?: number; generation?: number } = {},
+  options: { accessToken?: string; expiresAtMs?: number; generation?: number; status?: string; leaseFails?: boolean } = {},
 ): Promise<FakeBroker> {
   const runDir = join(dataDir, 'run')
   await mkdir(runDir, { recursive: true })
@@ -117,9 +117,18 @@ async function startBroker(
       buffer = buffer.subarray(4 + length)
       requests.push(request)
       const expiresAtMs = options.expiresAtMs ?? Date.now() + 3_600_000
+      if (options.leaseFails === true && request['method'] === 'lease') {
+        socket.write(encodeFrame({
+          version: 1,
+          requestId: request['requestId'],
+          ok: false,
+          error: { code: 'UNAUTHORIZED', message: 'authorization is still pending' },
+        }))
+        return
+      }
       const result =
         request['method'] === 'status'
-          ? { method: 'status', status: 'authenticated', generation: options.generation ?? 2, expiresAtMs }
+          ? { method: 'status', status: options.status ?? 'authenticated', generation: options.generation ?? 2, expiresAtMs }
           : {
               method: 'lease',
               accessToken: options.accessToken ?? 'mmoat_from_lease',
@@ -159,6 +168,8 @@ interface FixtureOptions {
   withRecords?: boolean
   /** 是否写 auth-state.json。 */
   withState?: boolean
+  /** 设备码登录的待授权信息（写进 auth-state.json 的 `authorization` 块）。 */
+  authorization?: { userCode: string; verificationUriComplete: string }
 }
 
 /** 在 `dataDir` 下伪造一套 mcode 凭据文件。 */
@@ -201,6 +212,16 @@ async function writeFixtures(dataDir: string, options: FixtureOptions = {}): Pro
           region: options.stateRegion ?? dir,
           generation: options.generation ?? 2,
           expiresAtMs: options.expiresAtMs ?? Date.now() + 3_600_000,
+          ...options.authorization === undefined
+            ? {}
+            : {
+                authorization: {
+                  leaseId: 'lease-1',
+                  userCode: options.authorization.userCode,
+                  verificationUri: 'https://account.minimax.cn/oauth-authorize',
+                  verificationUriComplete: options.authorization.verificationUriComplete,
+                },
+              },
         },
         null,
         2,
@@ -587,3 +608,48 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
   await walk(dir, '')
   return out
 }
+
+describe('设备码授权进行中（authorizing）', () => {
+  it('inspect() 报 authorizing，并带出用户码与授权地址', async () => {
+    const dataDir = await tempDir()
+    await writeFixtures(dataDir, {
+      status: 'authorizing',
+      withRecords: false,
+      authorization: {
+        userCode: 'KQZR-R2M7',
+        verificationUriComplete: 'https://account.minimax.cn/oauth-authorize?user_code=KQZR-R2M7',
+      },
+    })
+    const broker = await startBroker(dataDir, { status: 'authorizing' })
+    try {
+      const auth = new MiniMaxAuth({ dataDir })
+      const status = await auth.inspect()
+      expect(status.state).toBe('authorizing')
+      expect(status.userCode).toBe('KQZR-R2M7')
+      expect(status.verificationUri).toContain('user_code=KQZR-R2M7')
+    } finally {
+      await broker.close()
+    }
+  })
+
+  it('取不到 token 时，错误信息里带验证码，用户知道下一步做什么', async () => {
+    const dataDir = await tempDir()
+    await writeFixtures(dataDir, {
+      status: 'authorizing',
+      withRecords: false,
+      authorization: {
+        userCode: 'KQZR-R2M7',
+        verificationUriComplete: 'https://account.minimax.cn/oauth-authorize?user_code=KQZR-R2M7',
+      },
+    })
+    const broker = await startBroker(dataDir, { status: 'authorizing', leaseFails: true })
+    try {
+      const auth = new MiniMaxAuth({ dataDir })
+      const error = await auth.token().catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(MiniMaxAuthUnavailableError)
+      expect((error as Error).message).toContain('KQZR-R2M7')
+    } finally {
+      await broker.close()
+    }
+  })
+})

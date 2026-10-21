@@ -44,7 +44,7 @@ export const MINIMAX_CARD_KEYS: readonly string[] = [
 ]
 
 /** 卡片要展示的登录态分类。 */
-export type MiniMaxLoginState = 'ready' | 'anonymous' | 'missing' | 'expired' | 'error'
+export type MiniMaxLoginState = 'ready' | 'authorizing' | 'anonymous' | 'missing' | 'expired' | 'error'
 
 /** 凭据来源。 */
 export type MiniMaxLoginSource = 'lease' | 'file' | 'none'
@@ -56,6 +56,10 @@ export interface MiniMaxLoginView {
   generation?: number
   expiresAtMs?: number
   detail?: string
+  /** 设备码登录的用户码（`authorizing` 时可用）。 */
+  userCode?: string
+  /** 设备码登录的授权地址（`authorizing` 时可用）。 */
+  verificationUri?: string
 }
 
 /** 卡片要展示的模型行。 */
@@ -95,6 +99,7 @@ export interface MiniMaxStatusView {
 export function loginStateOf(value: unknown): MiniMaxLoginState {
   return value === 'ready'
     || value === 'anonymous'
+    || value === 'authorizing'
     || value === 'missing'
     || value === 'expired'
     || value === 'error'
@@ -159,6 +164,8 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
     })
   }
 
+  const pendingCode = stringOf(rawLogin['userCode'])
+  const pendingUri = stringOf(rawLogin['verificationUri'])
   const generation = finiteNumberOf(rawLogin['generation'])
   const expiresAtMs = finiteNumberOf(rawLogin['expiresAtMs'])
   const detail = stringOf(rawLogin['detail'])
@@ -175,6 +182,8 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
       ...(generation === undefined ? {} : { generation }),
       ...(expiresAtMs === undefined ? {} : { expiresAtMs }),
       ...(detail === undefined ? {} : { detail }),
+      ...(pendingCode === undefined ? {} : { userCode: pendingCode }),
+      ...(pendingUri === undefined ? {} : { verificationUri: pendingUri }),
     },
     models,
     pluginVersion: stringOf(raw['pluginVersion']) ?? 'dev',

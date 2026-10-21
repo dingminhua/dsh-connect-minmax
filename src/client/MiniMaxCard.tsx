@@ -74,6 +74,7 @@ export type MiniMaxBadgeTone = 'ready' | 'warn' | 'error' | 'unknown'
 export function badgeToneOf(state: MiniMaxLoginView['state']): MiniMaxBadgeTone {
   switch (state) {
     case 'ready': return 'ready'
+    case 'authorizing': return 'warn'
     case 'anonymous':
     case 'missing':
     case 'expired': return 'warn'
@@ -102,6 +103,8 @@ export function loginAdviceOf(
       return login.source === 'lease'
         ? t('advice.readyLease')
         : t('advice.readyFile')
+    case 'authorizing':
+      return t('advice.authorizing')
     case 'anonymous':
     case 'missing':
       return t('advice.signInRequired')
@@ -263,6 +266,16 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
           {login !== undefined && (
             <p className="dsm-minimax-hint" style={{ marginTop: '8px' }}>
               {loginAdviceOf(login, translate)}
+            </p>
+          )}
+          {login?.state === 'authorizing' && login.verificationUri !== undefined && (
+            <p className="dsm-minimax-hint" style={{ marginTop: '4px' }}>
+              {login.userCode === undefined
+                ? null
+                : <span>{translate('advice.authorizingCode', { code: login.userCode })} · </span>}
+              <a href={login.verificationUri} target="_blank" rel="noreferrer">
+                {login.verificationUri}
+              </a>
             </p>
           )}
           {/* 产品承诺：明写出来。用户要确认的正是这一点。 */}
