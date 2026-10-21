@@ -78,6 +78,11 @@ cordis.patch.yml, package.json, tsdown.config.ts, tsconfig*.json, vitest.config.
 ```ts
 // catalog.ts
 export const ROUTE = 'minimax'
+export const ROUTE_GLOBAL = 'minimax-global'
+export const MINIMAX_ROUTES = { cn: ROUTE, global: ROUTE_GLOBAL }
+export function routeForRegion(region: MiniMaxRegion): string
+export function displayNameForRegion(region: MiniMaxRegion): string
+export function toPiModel(spec: MiniMaxModelSpec, baseUrl: string, route?: string): Model  // route 默认 ROUTE
 export interface MiniMaxModelSpec {
   id: string; name: string; description?: string
   contextWindow: number; maxTokens: number
@@ -118,30 +123,40 @@ export class MiniMaxAuth {
 }
 
 // adapter.ts
-export function createMiniMaxProvider(auth: MiniMaxAuth, models: readonly MiniMaxModelSpec[]): Provider
+export function createMiniMaxProvider(
+  auth: MiniMaxAuth,
+  models: readonly MiniMaxModelSpec[],
+  options?: { baseUrl?: string, route?: string },
+): Provider
 export class MiniMaxAdapter extends PiAiAdapter { constructor(options: PiAiAdapterOptions, auth: MiniMaxAuth) }
 ```
 
 ## 5. 宿主接线
 
 - `export const name = 'dsh-connect-minmax'`；`export const inject = ['llm']`。
-- `apply(ctx, config)`：
-  1. 路由预检：`ctx.llm.listProviders()` 已有 `minimax` → 记 warn 并跳过（不 throw）；
-  2. 构造 `MiniMaxAuth`、模型表、Provider、`ResolvedPiAiProviderProfile`
-     （`provider`、`displayName: 'MiniMax（本机登录）'`、`streamIdleTimeoutMs`、`retryPolicy`、
+- `apply(ctx, config)`：对 `regions` 里的每个区域**各做一遍**下面 1–3 步：
+  1. 路由预检：`ctx.llm.listProviders()` 已有该路由名（`minimax` / `minimax-global`）→ 记 warn 并跳过（不 throw）；
+  2. 构造该区域的 `MiniMaxAuth`、模型表、Provider、`ResolvedPiAiProviderProfile`
+     （`provider: route`、`displayName: displayNameForRegion(region)`、`streamIdleTimeoutMs`、`retryPolicy`、
      `configuredMaxTokens: new Map()`、`modelErrors: new Map()`、图片预算、`piProvider`）；
-  3. `ctx.llm.registerAdapter([ROUTE], adapter)`（fiber 释放自动注销）；
-  4. `ctx.inject(['webServer'], …)` 注册状态路由（可选服务，不能 apply 期 `ctx.get()` 采样）。
-- `Config`（schemastery）：`models`（可空 = 全部）、`region`（`auto|cn|global`）、
-  `streamIdleTimeoutMs`、`baseUrl`（空 = 按 region 默认）。
+  3. `ctx.llm.registerAdapter([route], adapter)`（fiber 释放自动注销）；
+  4. 全部区域处理完后 `ctx.inject(['webServer'], …)` 注册一条状态路由，文档里带 `routes[]`
+     （可选服务，不能 apply 期 `ctx.get()` 采样）。
+- 两区域为何是两条路由：国内与国际是两套凭据（`~/.minimax/auth/prod/{cn,en}`），
+  一个 token 只在它自己的区域有效；合成一条路由没法表达"国内已登录、国际没登录"。
+- `Config`（schemastery）：`models`（可空 = 全部）、`regions`（默认 `["cn","global"]`）、
+  `streamIdleTimeoutMs`、`baseUrl`（国内版覆盖）、`globalBaseUrl`（国际版覆盖）、`longContext`。
+- 包名 `@dmh2002/dsh-connect-minmax`，但**插件行 id 与状态路由仍是裸名**
+  `dsh-connect-minmax`（改名会让已装用户的配置、设置命名空间、状态路由一起失效）。
 - 不注册 `registerConfigurableProviders`（`minimax` 在 pi-ai 目录里已被登记，避免 `DUPLICATE_DIRECTORY`）。
 - 不写 profile 的默认模型（用户自己在 Models 页选）。
 
 ## 6. 设置卡片（client）
 
-- 槽位：`plugins.bundle.config`（key = 包名）。
-- 展示：登录态（已登录/需登录）、来源（mcode 租约 / 本地文件）、generation、到期时间、
-  区域、模型数量与清单、最近一次错误。
+- 槽位：`plugins.bundle.config` / `plugins.row.config`；key 同时注册 scoped 与裸包名两种拼法
+  （宿主可能按 `@dmh2002/dsh-connect-minmax`、`dsh-connect-minmax`、`include:…` 或 `<包名>#<行 id>` 查）。
+- 展示：聚合登录徽标（任一路由「已登录」即为 ready）、每条路由一行（供应商 / 区域 / 登录态 / 到期）、
+  未就绪区域各一句"去哪儿登录"、模型数量与清单、最近一次错误。
 - 数据：宿主 `webServer` 路由 `/plugins/dsh-connect-minmax/status` 返回 JSON；
   客户端 10s 轮询（页面可见时）。
 - 文案：`ctx.locale.register` 中文/英文；插件管理器用 `locale/*.json`。

@@ -194,3 +194,12 @@ describe('authorizing 登录态', () => {
     expect(view.login.userCode).toBeUndefined()
   })
 })
+
+describe('MINIMAX_CARD_KEYS', () => {
+  it('同时覆盖 scoped 与裸包名，bundle 级与 row 级都要有', () => {
+    expect(MINIMAX_CARD_KEYS).toContain('@dmh2002/dsh-connect-minmax')
+    expect(MINIMAX_CARD_KEYS).toContain('dsh-connect-minmax')
+    expect(MINIMAX_CARD_KEYS).toContain('@dmh2002/dsh-connect-minmax#dsh-connect-minmax')
+    expect(new Set(MINIMAX_CARD_KEYS).size).toBe(MINIMAX_CARD_KEYS.length)
+  })
+})

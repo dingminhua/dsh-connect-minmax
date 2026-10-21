@@ -96,16 +96,18 @@ Harness  ──pi-ai anthropic-messages──▶  https://agent.minimax.cn/mavis
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `models` | `[]` | 启用哪些模型 id；空 = 目录全部 |
-| `region` | `auto` | `auto` / `cn` / `global`；`auto` 跟随本机登录态 |
+| `regions` | `["cn","global"]` | 注册哪些区域的路由：`cn` → `minimax`，`global` → `minimax-global`；只填一个则只注册该区域 |
 | `streamIdleTimeoutMs` | `300000` | 上游空闲超时 |
-| `baseUrl` | 空 | 覆盖托管 base URL（**不要**带 `/v1`，SDK 会自己拼 `/v1/messages`） |
+| `baseUrl` | 空 | 覆盖**国内版**托管 base URL（**不要**带 `/v1`，SDK 会自己拼 `/v1/messages`） |
+| `globalBaseUrl` | 空 | 覆盖**国际版**托管 base URL（规则同上） |
 | `longContext` | `false` | 用 1M 上下文档（仅 `M3` / `M3.1-Flash`）；上游按更高用量计费 |
 
 ## 故障排查
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| 选不到模型 / 分组不出现 | 插件没激活：插件管理器里看该行是否 `failed`；或 `minimax` 已被别的 provider 占用（插件会 warn 并跳过） |
+| 选不到模型 / 分组不出现 | 插件没激活：插件管理器里看该行是否 `failed`；或 `minimax` / `minimax-global` 已被别的 provider 占用（插件会 warn 并跳过） |
+| 国际版分组报"未登录" | 只登录了国内版。两个区域是两套凭据，在 MiniMax Code 里切到国际版登录才能用 `minimax-global` |
 | 卡片显示"未登录" | MiniMax Code 没登录。打开它登录后点卡片上的刷新 |
 | 卡片显示"仅本地文件凭据" | MiniMax Code 没运行。token 未过期前可用，过期后请启动它 |
 | 对话报 `AUTH` | token 被服务端撤销。在 MiniMax Code 里重新登录（必要时退出再登录） |

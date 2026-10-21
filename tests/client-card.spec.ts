@@ -11,14 +11,20 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  aggregateBadgeToneOf,
+  aggregateLabelKeyOf,
   badgeToneOf,
+  effectiveRoutesOf,
   expiryTextOf,
   loginAdviceOf,
+  providerLabelOf,
+  routeAdviceOf,
   sourceLabelKeyOf,
+  worstLoginStateOf,
 } from '../src/client/MiniMaxCard.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import type { MiniMaxSettingsKey } from '../src/client/locales.ts'
-import type { MiniMaxLoginView } from '../src/status-paths.ts'
+import type { MiniMaxLoginView, MiniMaxRouteView } from '../src/status-paths.ts'
 
 /** 一个把 key 映射成 "zh:<key>" 的假翻译函数，便于断言用了哪个键。 */
 const t = (key: string): string => `zh:${key}`
@@ -124,5 +130,159 @@ describe('expiryTextOf', () => {
     expect(expiryTextOf({ state: 'ready', source: 'lease', expiresAtMs: now + 5 * 60_000 }, now, t)).toBe('zh:login.inMinutes')
     expect(expiryTextOf({ state: 'ready', source: 'lease', expiresAtMs: now + 5 * 3_600_000 }, now, t)).toBe('zh:login.inHours')
     expect(expiryTextOf({ state: 'ready', source: 'lease', expiresAtMs: now + 5 * 86_400_000 }, now, t)).toBe('zh:login.inDays')
+  })
+})
+
+/** 造一条路由。 */
+function routeOf(
+  route: string,
+  region: 'cn' | 'global',
+  login: MiniMaxLoginView,
+): MiniMaxRouteView {
+  return {
+    route,
+    region,
+    regionLabel: region === 'global' ? '国际版' : '国内版',
+    baseUrl: `https://${route}.example/api`,
+    login,
+  }
+}
+
+describe('worstLoginStateOf', () => {
+  it('空数组 → undefined', () => {
+    expect(worstLoginStateOf([])).toBeUndefined()
+  })
+
+  it('取最严重的那个（error > expired > missing/anonymous > authorizing）', () => {
+    expect(worstLoginStateOf(['ready', 'error', 'expired'])).toBe('error')
+    expect(worstLoginStateOf(['ready', 'expired', 'missing'])).toBe('expired')
+    expect(worstLoginStateOf(['ready', 'anonymous', 'authorizing'])).toBe('anonymous')
+    expect(worstLoginStateOf(['ready', 'missing', 'authorizing'])).toBe('missing')
+    expect(worstLoginStateOf(['ready', 'authorizing'])).toBe('authorizing')
+  })
+})
+
+describe('aggregateBadgeToneOf', () => {
+  it('没有路由 → 未知色调', () => {
+    expect(aggregateBadgeToneOf([])).toBe('unknown')
+  })
+
+  it('任一路由就绪 → 绿色', () => {
+    expect(aggregateBadgeToneOf([
+      routeOf('minimax', 'cn', { state: 'ready', source: 'lease' }),
+      routeOf('minimax-global', 'global', { state: 'missing', source: 'none' }),
+    ])).toBe('ready')
+  })
+
+  it('全未就绪 → 取最严重的那条（琥珀 / 红色）', () => {
+    expect(aggregateBadgeToneOf([
+      routeOf('minimax', 'cn', { state: 'expired', source: 'file' }),
+      routeOf('minimax-global', 'global', { state: 'anonymous', source: 'none' }),
+    ])).toBe('warn')
+    expect(aggregateBadgeToneOf([
+      routeOf('minimax', 'cn', { state: 'anonymous', source: 'none' }),
+      routeOf('minimax-global', 'global', { state: 'error', source: 'none' }),
+    ])).toBe('error')
+  })
+})
+
+describe('aggregateLabelKeyOf', () => {
+  const ready = routeOf('minimax', 'cn', { state: 'ready', source: 'lease' })
+  const missing = routeOf('minimax-global', 'global', { state: 'missing', source: 'none' })
+
+  it('读取中 → row.loading', () => {
+    expect(aggregateLabelKeyOf([], true)).toBe('row.loading')
+  })
+
+  it('全部就绪 → routes.allReady', () => {
+    expect(aggregateLabelKeyOf([ready], false)).toBe('routes.allReady')
+  })
+
+  it('部分就绪 → routes.anyReady', () => {
+    expect(aggregateLabelKeyOf([ready, missing], false)).toBe('routes.anyReady')
+  })
+
+  it('全未就绪 → 最严重那条的状态名', () => {
+    expect(aggregateLabelKeyOf([missing], false)).toBe('login.missing')
+    expect(aggregateLabelKeyOf([
+      routeOf('minimax', 'cn', { state: 'error', source: 'none' }),
+      missing,
+    ], false)).toBe('login.error')
+  })
+})
+
+describe('effectiveRoutesOf', () => {
+  const base = {
+    ok: true,
+    route: 'minimax' as const,
+    region: 'cn' as const,
+    regionLabel: '国内版',
+    baseUrl: 'https://cn.example/api',
+    login: { state: 'ready' as const, source: 'lease' as const },
+    models: [],
+    pluginVersion: '0.1.0',
+    checkedAt: 0,
+  }
+
+  it('routes 有内容时原样返回', () => {
+    const routes = [routeOf('minimax', 'cn', { state: 'ready', source: 'lease' })]
+    expect(effectiveRoutesOf({ ...base, routes })).toBe(routes)
+  })
+
+  it('routes 为空（旧应答）→ 用顶层字段合成一条 minimax 路由', () => {
+    const routes = effectiveRoutesOf({ ...base, routes: [] })
+    expect(routes.length).toBe(1)
+    expect(routes[0]?.route).toBe('minimax')
+    expect(routes[0]?.region).toBe('cn')
+    expect(routes[0]?.login.state).toBe('ready')
+  })
+})
+
+describe('routeAdviceOf', () => {
+  it('未就绪的国内版与国际版给出不同的建议', () => {
+    const cn = routeOf('minimax', 'cn', { state: 'anonymous', source: 'none' })
+    const global = routeOf('minimax-global', 'global', { state: 'missing', source: 'none' })
+    expect(routeAdviceOf(cn, t)).toBe('zh:advice.cn.signInRequired')
+    expect(routeAdviceOf(global, t)).toBe('zh:advice.global.signInRequired')
+    expect(routeAdviceOf(cn, t)).not.toBe(routeAdviceOf(global, t))
+  })
+
+  it('expired 也分区域', () => {
+    expect(routeAdviceOf(
+      routeOf('minimax-global', 'global', { state: 'expired', source: 'file' }),
+      t,
+    )).toBe('zh:advice.global.expired')
+  })
+
+  it('authorizing 分区域', () => {
+    expect(routeAdviceOf(
+      routeOf('minimax-global', 'global', { state: 'authorizing', source: 'none' }),
+      t,
+    )).toBe('zh:advice.global.authorizing')
+  })
+
+  it('ready 沿用就绪建议', () => {
+    expect(routeAdviceOf(
+      routeOf('minimax', 'cn', { state: 'ready', source: 'lease' }),
+      t,
+    )).toBe('zh:advice.readyLease')
+  })
+
+  it('error 显示宿主给的 detail', () => {
+    expect(routeAdviceOf(
+      routeOf('minimax', 'cn', { state: 'error', source: 'none', detail: 'boom' }),
+      t,
+    )).toBe('boom')
+  })
+})
+
+describe('providerLabelOf', () => {
+  it('两条路由各有各的供应商显示名', () => {
+    expect(providerLabelOf('minimax', t)).toBe('zh:provider.minimax')
+    expect(providerLabelOf('minimax-global', t)).toBe('zh:provider.minimaxGlobal')
+  })
+
+  it('不认识的路由名原样显示，不编名字', () => {
+    expect(providerLabelOf('minimax-future', t)).toBe('minimax-future')
   })
 })

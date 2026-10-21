@@ -24,6 +24,7 @@ import {
   type MiniMaxStatusAuth,
   type MiniMaxStatusDeps,
   type MiniMaxStatusModelSpec,
+  type MiniMaxStatusRouteDeps,
 } from '../src/status.ts'
 
 const MODELS: readonly MiniMaxStatusModelSpec[] = [
@@ -42,9 +43,21 @@ function authStub(overrides: Partial<MiniMaxStatusAuth> = {}): MiniMaxStatusAuth
   }
 }
 
+/** 一条路由的依赖（`auth` 换成了 `routes[0]` 里的字段）。 */
+function routeStub(overrides: Partial<MiniMaxStatusRouteDeps> = {}): MiniMaxStatusRouteDeps {
+  const auth = overrides.auth ?? authStub()
+  return {
+    route: overrides.route ?? 'minimax',
+    region: overrides.region ?? auth.region,
+    regionLabel: overrides.regionLabel ?? auth.regionLabel,
+    baseUrl: overrides.baseUrl ?? auth.baseUrl,
+    auth,
+  }
+}
+
 function depsStub(overrides: Partial<MiniMaxStatusDeps> = {}): MiniMaxStatusDeps {
   return {
-    auth: authStub(),
+    routes: [routeStub()],
     models: MODELS,
     version: '0.1.0',
     ...overrides,
@@ -70,6 +83,34 @@ describe('buildMiniMaxStatus', () => {
     expect(payload.login.state).toBe('ready')
     expect(payload.login.source).toBe('lease')
     expect(payload.login.generation).toBe(3)
+    expect(payload.routes).toHaveLength(1)
+    expect(payload.routes[0]?.route).toBe('minimax')
+    expect(payload.routes[0]?.region).toBe('cn')
+    expect(payload.routes[0]?.login.state).toBe('ready')
+  })
+
+  it('两个区域各自一条路由，顶层字段取第一条', async () => {
+    const payload = await buildMiniMaxStatus(depsStub({
+      routes: [
+        routeStub(),
+        routeStub({
+          route: 'minimax-global',
+          region: 'global',
+          regionLabel: '国际版',
+          baseUrl: 'https://agent.minimax.io/mavis/api/v1/llm',
+          auth: authStub({
+            region: 'global',
+            regionLabel: '国际版',
+            baseUrl: 'https://agent.minimax.io/mavis/api/v1/llm',
+            inspect: async () => ({ state: 'missing', source: 'none' }),
+          }),
+        }),
+      ],
+    }))
+    expect(payload.routes).toHaveLength(2)
+    expect(payload.routes[1]?.login.state).toBe('missing')
+    expect(payload.region).toBe('cn')
+    expect(payload.route).toBe('minimax')
   })
 
   it('模型目录被投影成可变数组（便于 JSON 序列化）', async () => {
@@ -81,9 +122,11 @@ describe('buildMiniMaxStatus', () => {
 
   it('响应里没有任何凭据材料', async () => {
     const payload = await buildMiniMaxStatus(depsStub({
-      auth: authStub({
-        inspect: async () => ({ state: 'ready', source: 'lease', generation: 1, expiresAtMs: 1 }),
-      }),
+      routes: [routeStub({
+        auth: authStub({
+          inspect: async () => ({ state: 'ready', source: 'lease', generation: 1, expiresAtMs: 1 }),
+        }),
+      })],
     }))
     const serialized = JSON.stringify(payload)
     expect(serialized).not.toMatch(/accessToken/i)
@@ -250,7 +293,7 @@ describe('registerMiniMaxStatusRoute', () => {
     const { server, routes } = serverStub()
     registerMiniMaxStatusRoute(
       { webServer: server },
-      depsStub({ auth: authStub({ inspect: async () => { throw new Error('kaboom') } }) }),
+      depsStub({ routes: [routeStub({ auth: authStub({ inspect: async () => { throw new Error('kaboom') } }) })] }),
     )
     const { res, read } = resStub()
     await routes[0]?.handler({ method: 'GET', socket: { remoteAddress: '127.0.0.1' } } as never, res as never)

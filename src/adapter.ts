@@ -30,11 +30,11 @@ import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepsee
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { PiAiAdapterOptions } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { MiniMaxAuth } from './auth.ts'
-import { ROUTE, toPiModel } from './catalog.ts'
+import { ROUTE, displayNameForRegion, toPiModel } from './catalog.ts'
 import type { MiniMaxModelSpec } from './catalog.ts'
 
-/** 选择器里显示的分组名；也是 `ResolvedPiAiProviderProfile.displayName` 的来源。 */
-export const PROVIDER_DISPLAY_NAME = 'MiniMax（本机登录）'
+/** 选择器里显示的分组名（国内版）；也是 `ResolvedPiAiProviderProfile.displayName` 的来源。 */
+export const PROVIDER_DISPLAY_NAME = displayNameForRegion('cn')
 
 /** 凭据来源标记，随 pi-ai 的 `AuthResult` 一起回传，便于诊断时区分租约与文件。 */
 const CREDENTIAL_SOURCE = 'minimax-local-login'
@@ -82,6 +82,8 @@ export interface MiniMaxProviderOptions {
    * 所以 provider 与模型的 baseUrl 不一致等于配置没生效。
    */
   baseUrl?: string
+  /** 这条 provider 服务的路由名（`minimax` / `minimax-global`）。 */
+  route?: string
 }
 
 /**
@@ -101,7 +103,8 @@ export function createMiniMaxProvider(
   options: MiniMaxProviderOptions = {},
 ): Provider {
   const baseUrl = options.baseUrl ?? auth.baseUrl
-  const piModels: Model<Api>[] = models.map(spec => toPiModel(spec, baseUrl))
+  const route = options.route ?? ROUTE
+  const piModels: Model<Api>[] = models.map(spec => toPiModel(spec, baseUrl, route))
   const api: ProviderStreams = anthropicMessagesApi()
   const providerAuth: ProviderAuth = {
     apiKey: {
@@ -115,8 +118,8 @@ export function createMiniMaxProvider(
     },
   }
   return {
-    id: ROUTE,
-    name: PROVIDER_DISPLAY_NAME,
+    id: route,
+    name: displayNameForRegion(auth.region),
     baseUrl,
     auth: providerAuth,
     getModels: () => piModels,

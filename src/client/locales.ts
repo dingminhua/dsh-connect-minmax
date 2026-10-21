@@ -47,12 +47,30 @@ export const en = {
   'advice.authorizingCode': 'Code {code}',
   'advice.expired': 'The sign-in expired: sign in again in MiniMax Code.',
 
+  'advice.cn.signInRequired': 'China edition: not signed in. Open MiniMax Code and sign in with a China-edition account; this plugin follows that sign-in.',
+  'advice.cn.expired': 'China edition: the sign-in expired. Sign in again in MiniMax Code with a China-edition account.',
+  'advice.cn.authorizing': 'China edition: MiniMax Code is waiting for your approval. Finish the device-code prompt, then reload this card.',
+  'advice.global.signInRequired': 'Global edition: not signed in. Open MiniMax Code and sign in with a Global-edition account; this plugin follows that sign-in.',
+  'advice.global.expired': 'Global edition: the sign-in expired. Sign in again in MiniMax Code with a Global-edition account.',
+  'advice.global.authorizing': 'Global edition: MiniMax Code is waiting for your approval. Finish the device-code prompt, then reload this card.',
+
   'promise.noApiKey': 'This plugin never reads, asks for, or stores an API key — the credential always comes from the local sign-in.',
 
   'region.label': 'Region',
   'region.baseUrl': 'Endpoint',
+  'region.cn': 'China',
+  'region.global': 'Global',
   'route.label': 'Provider route',
   'version.label': 'Plugin version',
+
+  'routes.label': 'Routes',
+  'routes.provider': 'Provider',
+  'routes.state': 'Sign-in',
+  'routes.expires': 'Expires',
+  'routes.allReady': 'All routes are signed in',
+  'routes.anyReady': 'At least one route is signed in',
+  'provider.minimax': 'MiniMax',
+  'provider.minimaxGlobal': 'MiniMax Global',
 
   'models.label': 'Models',
   'models.count': '{count} models',
@@ -111,12 +129,30 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'advice.authorizingCode': '验证码 {code}',
   'advice.expired': '登录已过期：请在 MiniMax Code 中重新登录。',
 
+  'advice.cn.signInRequired': '国内版：尚未登录。请打开 MiniMax Code，用国内版账号登录，本插件会自动跟随该登录。',
+  'advice.cn.expired': '国内版：登录已过期。请在 MiniMax Code 中用国内版账号重新登录。',
+  'advice.cn.authorizing': '国内版：MiniMax Code 正在等你完成授权。请完成设备码授权，然后刷新这张卡片。',
+  'advice.global.signInRequired': '国际版：尚未登录。请打开 MiniMax Code，用国际版账号登录，本插件会自动跟随该登录。',
+  'advice.global.expired': '国际版：登录已过期。请在 MiniMax Code 中用国际版账号重新登录。',
+  'advice.global.authorizing': '国际版：MiniMax Code 正在等你完成授权。请完成设备码授权，然后刷新这张卡片。',
+
   'promise.noApiKey': '本插件不读取、不索取、也不保存任何 API Key —— 凭据始终来自本机登录态。',
 
   'region.label': '区域',
   'region.baseUrl': '接口地址',
+  'region.cn': '国内版',
+  'region.global': '国际版',
   'route.label': '供应商路由',
   'version.label': '插件版本',
+
+  'routes.label': '路由',
+  'routes.provider': '供应商',
+  'routes.state': '登录态',
+  'routes.expires': '到期',
+  'routes.allReady': '全部路由都已登录',
+  'routes.anyReady': '至少一条路由已登录',
+  'provider.minimax': 'MiniMax',
+  'provider.minimaxGlobal': 'MiniMax Global',
 
   'models.label': '模型',
   'models.count': '{count} 个模型',

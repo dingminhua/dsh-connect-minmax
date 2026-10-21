@@ -28,10 +28,16 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type { PiAiAdapterOptions, ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import { INERT_AUTH, MiniMaxAdapter, PROVIDER_DISPLAY_NAME, createMiniMaxProvider } from './adapter.ts'
 import { MiniMaxAuth } from './auth.ts'
-import { MINIMAX_MODELS, ROUTE, regionBaseUrl, withContextWindow } from './catalog.ts'
+import {
+  MINIMAX_MODELS,
+  displayNameForRegion,
+  regionBaseUrl,
+  routeForRegion,
+  withContextWindow,
+} from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import { registerMiniMaxStatusRoute } from './status.ts'
-import type { MiniMaxStatusAuth, MiniMaxStatusContext } from './status.ts'
+import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } from './status.ts'
 import { PLUGIN_VERSION } from './version.ts'
 
 /** 插件名：同时是 Loader 条目 id 与设置命名空间。 */
@@ -65,12 +71,19 @@ const DEFAULT_REASONING_EFFORT = 'medium'
 export interface MiniMaxConfig {
   /** 启用的模型 id；留空表示目录全部。 */
   models?: string[]
-  /** 登录区域；`auto` 跟随本机登录态（`auth-state.json`）。 */
-  region?: 'auto' | MiniMaxRegion
+  /**
+   * 注册哪些区域的路由，默认两个都注册。
+   *
+   * 国内与国际是两套凭据（`~/.minimax/auth/prod/cn` / `.../en`），因此各注册一条
+   * 供应商路由：`minimax` 与 `minimax-global`。只想要一个区域时把它缩小成 `['cn']`。
+   */
+  regions?: MiniMaxRegion[]
   /** 上游空闲超时（毫秒）。 */
   streamIdleTimeoutMs?: number
-  /** 覆盖托管 LLM base URL；留空表示按区域默认值。 */
+  /** 覆盖国内版的托管 LLM base URL；留空表示用区域默认值。 */
   baseUrl?: string
+  /** 覆盖国际版的托管 LLM base URL；留空表示用区域默认值。 */
+  globalBaseUrl?: string
   /**
    * 使用 1M 长上下文档（仅 `M3` / `M3.1-Flash` 支持）。
    *
@@ -84,7 +97,10 @@ export interface MiniMaxConfig {
 /** 配置 schema：值经过 schemastery 校验/补默认后才进 `apply()`。 */
 export const Config: z<MiniMaxConfig> = z.object({
   models: z.array(z.string()).default([]).description('启用的模型 id（空 = 目录全部）。'),
-  region: z.union(['auto', 'cn', 'global']).default('auto').description('登录区域；auto 跟随本机登录态。'),
+  regions: z
+    .array(z.union(['cn', 'global']))
+    .default(['cn', 'global'])
+    .description('注册哪些区域：默认国内 + 国际两条路由；只填一个则只注册该区域。'),
   streamIdleTimeoutMs: z
     .number()
     .step(1)
@@ -94,7 +110,11 @@ export const Config: z<MiniMaxConfig> = z.object({
   baseUrl: z
     .string()
     .default('')
-    .description('覆盖托管 LLM base URL（形如 https://agent.minimax.cn/mavis/api/v1/llm，不要带 /v1）。'),
+    .description('覆盖国内版托管 base URL（形如 https://agent.minimax.cn/mavis/api/v1/llm，不要带 /v1）。'),
+  globalBaseUrl: z
+    .string()
+    .default('')
+    .description('覆盖国际版托管 base URL（形如 https://agent.minimax.io/mavis/api/v1/llm，不要带 /v1）。'),
   longContext: z
     .boolean()
     .default(false)
@@ -161,54 +181,21 @@ export function effectiveBaseUrl(configured: string | undefined, fallback: strin
  * @param config - 已校验的插件配置。
  */
 export function apply(ctx: Context, config: MiniMaxConfig): void {
-  const provider = ctx.llm.listProviders().find(entry => entry.id === ROUTE)
-  if (provider !== undefined) {
-    ctx.logger?.warn(
-      `dsh-connect-minmax: 路由 "${ROUTE}" 已被其它 provider 注册（显示名 "${provider.name}"），`
-      + '本插件跳过注册。请在插件管理器里停用冲突项后重试。',
-    )
-    return
-  }
-
   const warn = (message: string): void => {
     ctx.logger?.warn(`dsh-connect-minmax: ${message}`)
   }
 
-  const requestedRegion = config.region ?? 'auto'
-  const auth = new MiniMaxAuth({ region: requestedRegion })
+  const requestedRegions = normalizeRegions(config.regions, warn)
   const longContext = config.longContext ?? false
   const models = selectModels(config.models, warn).map(spec => withContextWindow(spec, longContext))
-  const baseUrl = effectiveBaseUrl(config.baseUrl, regionBaseUrl(auth.region))
 
-  // 常见写法错误：把 SDK 自己要拼的路径写进了 baseUrl，结果是 .../v1/v1/messages。
-  if (baseUrl !== auth.baseUrl && /\/(?:v1|v1\/messages)$/.test(baseUrl)) {
-    warn(`baseUrl 末尾不应包含 "/v1" 或 "/v1/messages"（SDK 会自己拼 /v1/messages），当前为 "${baseUrl}"`)
-  }
-  if (requestedRegion !== 'auto' && requestedRegion !== auth.region) {
-    warn(`配置区域为 ${requestedRegion}，但登录态解析为 ${auth.region}；token 可能不被对端接受`)
-  }
+  /** 每个区域一条路由；装配方式完全相同，只有凭据面与 baseUrl 不同。 */
+  const registeredRoutes: MiniMaxStatusRouteDeps[] = []
 
-  const piProvider = createMiniMaxProvider(auth, models, { baseUrl })
-  const profile: ResolvedPiAiProviderProfile = {
-    provider: ROUTE,
-    displayName: PROVIDER_DISPLAY_NAME,
-    // 宿主未指定档位时的默认值，见 DEFAULT_REASONING_EFFORT 的说明。
-    reasoning: DEFAULT_REASONING_EFFORT,
-    streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-    retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-minmax retryPolicy'),
-    // 目录里的 maxTokens 只用于 sizing，不能当请求默认输出上限。
-    configuredMaxTokens: new Map(),
-    modelErrors: new Map(),
-    maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
-    requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
-    requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
-    piProvider,
-  }
-
-  // 同一个 Map 引用：PiAiAdapter 按引用判断"配置有没有换代"，每次新建 Map
-  // 会让它每个请求都重建一次 pi-ai 集合（快照缓存永不命中）。
-  const profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile> = new Map([[ROUTE, profile]])
-  const options: PiAiAdapterOptions = {
+  // 附件解析等宿主能力两个区域共用，抽出来避免为第二条路由复制一遍。
+  const adapterOptions = (
+    profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>,
+  ): PiAiAdapterOptions => ({
     profiles: () => profiles,
     // 凭据走 provider 的 auth.apiKey.resolve（每次请求执行），这里不接管。
     resolveApiKey: async () => undefined,
@@ -227,25 +214,67 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     onReplayDegrade: ({ model, reason }) => {
       warn(`模型 ${model} 的历史 replay state 不可用（${reason}），已退化为 provider-neutral 转换`)
     },
+  })
+
+  for (const region of requestedRegions) {
+    const route = routeForRegion(region)
+    const occupied = ctx.llm.listProviders().find(entry => entry.id === route)
+    if (occupied !== undefined) {
+      warn(
+        `路由 "${route}" 已被其它 provider 注册（显示名 "${occupied.name}"），跳过该区域。`
+        + '请在插件管理器里停用冲突项后重试。',
+      )
+      continue
+    }
+
+    const auth = new MiniMaxAuth({ region })
+    const configured = region === 'global' ? config.globalBaseUrl : config.baseUrl
+    const baseUrl = effectiveBaseUrl(configured, regionBaseUrl(region))
+
+    // 常见写法错误：把 SDK 自己要拼的路径写进了 baseUrl，结果是 .../v1/v1/messages。
+    if (baseUrl !== auth.baseUrl && /\/(?:v1|v1\/messages)$/.test(baseUrl)) {
+      warn(`baseUrl 末尾不应包含 "/v1" 或 "/v1/messages"（SDK 会自己拼 /v1/messages），当前为 "${baseUrl}"`)
+    }
+
+    const piProvider = createMiniMaxProvider(auth, models, { baseUrl, route })
+    const profile: ResolvedPiAiProviderProfile = {
+      provider: route,
+      displayName: displayNameForRegion(region),
+      // 宿主未指定档位时的默认值，见 DEFAULT_REASONING_EFFORT 的说明。
+      reasoning: DEFAULT_REASONING_EFFORT,
+      streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-minmax retryPolicy'),
+      // 目录里的 maxTokens 只用于 sizing，不能当请求默认输出上限。
+      configuredMaxTokens: new Map(),
+      modelErrors: new Map(),
+      maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
+      requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
+      requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
+      piProvider,
+    }
+
+    // 同一个 Map 引用：PiAiAdapter 按引用判断"配置有没有换代"，每次新建 Map
+    // 会让它每个请求都重建一次 pi-ai 集合（快照缓存永不命中）。
+    const profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile> = new Map([[route, profile]])
+    const adapter = new MiniMaxAdapter(adapterOptions(profiles), auth)
+    ctx.llm.registerAdapter([route], adapter)
+    ctx.logger?.info(
+      `dsh-connect-minmax: 已注册 provider "${route}"（${displayNameForRegion(region)}，`
+      + `${models.length} 个模型，区域 ${auth.regionLabel}，baseUrl ${baseUrl}）`,
+    )
+
+    registeredRoutes.push({
+      route,
+      region,
+      regionLabel: auth.regionLabel,
+      baseUrl,
+      auth: statusAuthOf(auth),
+    })
   }
 
-  const adapter = new MiniMaxAdapter(options, auth)
-  ctx.llm.registerAdapter([ROUTE], adapter)
-  ctx.logger?.info(
-    `dsh-connect-minmax: 已注册 provider "${ROUTE}"（${models.length} 个模型，区域 ${auth.regionLabel}，`
-    + `baseUrl ${baseUrl}）`,
-  )
-
-  // 状态路由要一个"只读凭据面"。`MiniMaxAuth.lastFailure` 是 getter，静态类型是
-  // `string | undefined`（必选属性 + 含 undefined），而 `MiniMaxStatusAuth` 把它声明
-  // 成 `readonly lastFailure?: string`；在 `exactOptionalPropertyTypes` 下这两者不
-  // 可直接赋值，所以显式投影一份，而不是用 as 把整个对象硬转过去。
-  const statusAuth: MiniMaxStatusAuth = {
-    region: auth.region,
-    regionLabel: auth.regionLabel,
-    baseUrl: auth.baseUrl,
-    inspect: signal => auth.inspect(signal),
-    ...auth.lastFailure === undefined ? {} : { lastFailure: auth.lastFailure },
+  if (registeredRoutes.length === 0) {
+    warn('没有注册任何路由（全部被占用或全部被禁用），插件未生效。')
+    return
   }
 
   // 状态卡片是可选能力：等 webServer 出现再挂，不能 apply 期采样。
@@ -253,9 +282,46 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     // status.ts 只声明它真正用到的 webServer 面（便于测试替身），注入回调给的
     // 是完整 Context；`webServer` 由这次注入保证存在，所以这里做一次收窄。
     registerMiniMaxStatusRoute(webCtx as unknown as MiniMaxStatusContext, {
-      auth: statusAuth,
+      routes: registeredRoutes,
       models,
       version: PLUGIN_VERSION,
     })
   })
+}
+
+/**
+ * 把状态路由要的"只读凭据面"从 `MiniMaxAuth` 上投影出来。
+ *
+ * `MiniMaxAuth.lastFailure` 是返回 `string | undefined` 的 getter，而
+ * `MiniMaxStatusAuth` 在 `exactOptionalPropertyTypes` 下声明的是
+ * `readonly lastFailure?: string`；两者不可直接赋值，所以逐字段投影。
+ */
+function statusAuthOf(auth: MiniMaxAuth): MiniMaxStatusAuth {
+  return {
+    region: auth.region,
+    regionLabel: auth.regionLabel,
+    baseUrl: auth.baseUrl,
+    inspect: signal => auth.inspect(signal),
+    ...auth.lastFailure === undefined ? {} : { lastFailure: auth.lastFailure },
+  }
+}
+
+/**
+ * 归一化 `regions` 配置。
+ *
+ * 空数组/未配置 = 两个区域都注册；未知取值丢 warn 并忽略；去重保持声明顺序。
+ */
+export function normalizeRegions(
+  configured: readonly string[] | undefined,
+  warn: (message: string) => void,
+): readonly MiniMaxRegion[] {
+  const regions: MiniMaxRegion[] = []
+  for (const raw of configured ?? []) {
+    if (raw !== 'cn' && raw !== 'global') {
+      warn(`未知区域 "${raw}"，已忽略（可用：cn、global）`)
+      continue
+    }
+    if (!regions.includes(raw)) regions.push(raw)
+  }
+  return regions.length === 0 ? ['cn', 'global'] : regions
 }

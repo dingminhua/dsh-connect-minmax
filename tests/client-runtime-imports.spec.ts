@@ -176,6 +176,8 @@ describe('tsdown 客户端配置', () => {
     ) as { name: string }
     const config = readFileSync(join(root, 'tsdown.config.ts'), 'utf8')
     expect(config).toContain('export const PLUGIN_ID = PACKAGE.name')
-    expect(pkg.name).toBe('dsh-connect-minmax')
+    // 包名可以带 scope（`@dmh2002/dsh-connect-minmax`），但**必须是**这个插件
+    // 的包名——断言的是"名字对不对"，不是"scope 有没有"。
+    expect(pkg.name.endsWith('dsh-connect-minmax')).toBe(true)
   })
 })

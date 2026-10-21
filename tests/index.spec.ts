@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import { MiniMaxAdapter, PROVIDER_DISPLAY_NAME } from '../src/adapter.ts'
 import { MINIMAX_MODELS, ROUTE, regionBaseUrl } from '../src/catalog.ts'
-import { Config, apply, effectiveBaseUrl, selectModels } from '../src/index.ts'
+import { Config, apply, effectiveBaseUrl, normalizeRegions, selectModels } from '../src/index.ts'
 import { PLUGIN_VERSION } from '../src/version.ts'
 
 /**
@@ -65,9 +65,10 @@ describe('Config', () => {
   it('给未配置字段补默认值', () => {
     const resolved = Config({})
     expect(resolved.models).toEqual([])
-    expect(resolved.region).toBe('auto')
+    expect(resolved.regions).toEqual(['cn', 'global'])
     expect(resolved.streamIdleTimeoutMs).toBe(300_000)
     expect(resolved.baseUrl).toBe('')
+    expect(resolved.globalBaseUrl).toBe('')
     expect(resolved.longContext).toBe(false)
   })
 })
@@ -120,7 +121,7 @@ describe('PLUGIN_VERSION', () => {
 describe('apply', () => {
   it('注册 minimax 路由，并让 GUI 拿到目录与默认思考档位', async () => {
     const result = harness()
-    apply(result.ctx, {})
+    apply(result.ctx, { regions: ['cn'] })
 
     const adapter = registeredAdapter(result)
     expect(adapter.providerInfo(ROUTE).name).toBe(PROVIDER_DISPLAY_NAME)
@@ -145,7 +146,7 @@ describe('apply', () => {
 
   it('longContext 打开后，只有支持 1M 的模型换档', async () => {
     const result = harness()
-    apply(result.ctx, { longContext: true })
+    apply(result.ctx, { longContext: true, regions: ['cn'] })
 
     const adapter = registeredAdapter(result)
     const flash = await adapter.resolveModel(ROUTE, 'MiniMax-M3.1-Flash')
@@ -158,21 +159,21 @@ describe('apply', () => {
 
   it('路由已被占用时只 warn，不 throw、不注册', () => {
     const result = harness({ providers: [{ id: ROUTE, name: '占位' }] })
-    expect(() => apply(result.ctx, {})).not.toThrow()
+    expect(() => apply(result.ctx, { regions: ['cn'] })).not.toThrow()
     expect(result.registered).toHaveLength(0)
     expect(result.warnings.join('\n')).toContain('已被其它 provider 注册')
   })
 
   it('按配置只注册选中的模型', async () => {
     const result = harness()
-    apply(result.ctx, { models: ['MiniMax-M2.7'] })
+    apply(result.ctx, { models: ['MiniMax-M2.7'], regions: ['cn'] })
     const models = await registeredAdapter(result).listModels(ROUTE)
     expect(models.map(model => model.id)).toEqual(['MiniMax-M2.7'])
   })
 
   it('baseUrl 写成带 /v1 的形式时给出可操作的 warn', () => {
     const result = harness()
-    apply(result.ctx, { baseUrl: 'https://example.test/mavis/api/v1/llm/v1' })
+    apply(result.ctx, { baseUrl: 'https://example.test/mavis/api/v1/llm/v1', regions: ['cn'] })
     expect(result.warnings.join('\n')).toContain('不应包含 "/v1"')
   })
 
@@ -180,6 +181,37 @@ describe('apply', () => {
     const result = harness()
     apply(result.ctx, {})
     expect(result.injections).toEqual([['webServer']])
+  })
+
+  it('默认同时注册国内与国际两条路由，显示名与 baseUrl 各自独立', async () => {
+    const result = harness()
+    apply(result.ctx, {})
+
+    expect(result.registered.map(entry => entry.routes[0])).toEqual(['minimax', 'minimax-global'])
+    const cn = result.registered[0]!.adapter as MiniMaxAdapter
+    const global = result.registered[1]!.adapter as MiniMaxAdapter
+    expect(cn.providerInfo(ROUTE).name).toBe('MiniMax（本机登录）')
+    expect(global.providerInfo('minimax-global').name).toBe('MiniMax Global（本机登录）')
+    const globalModels = await global.listModels('minimax-global')
+    expect(globalModels.length).toBe(MINIMAX_MODELS.length)
+    expect(globalModels[0]!.id).toBe(MINIMAX_MODELS[0]!.id)
+  })
+
+  it('regions 只留国际版时，只注册一条国际路由', () => {
+    const result = harness()
+    apply(result.ctx, { regions: ['global'] })
+    expect(result.registered).toHaveLength(1)
+    expect(result.registered[0]!.routes).toEqual(['minimax-global'])
+  })
+
+  it('未知区域被忽略并 warn，不静默消失', () => {
+    const result = harness()
+    const normalize = (value: readonly string[] | undefined): readonly string[] =>
+      normalizeRegions(value, message => result.warnings.push(message))
+    expect(normalize(['cn', 'mars', 'cn'])).toEqual(['cn'])
+    expect(normalize(undefined)).toEqual(['cn', 'global'])
+    expect(normalize([])).toEqual(['cn', 'global'])
+    expect(result.warnings.join('\n')).toContain('未知区域 "mars"')
   })
 
   it('不注册可配置供应商（minimax 已在 pi-ai 目录里，会 DUPLICATE_DIRECTORY）', () => {

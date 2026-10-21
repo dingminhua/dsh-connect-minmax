@@ -40,6 +40,8 @@ const BROKER_EXPIRED = 'expired'
  * `auth-state.json` 的 `authorization` 块会带上 `userCode` 与授权地址。
  */
 const BROKER_AUTHORIZING = 'authorizing'
+/** 正在退出登录：token 已不可用，但也不是"从没登录过"。 */
+const BROKER_LOGOUT_PENDING = 'logout_pending'
 
 /** 登录态分类。`authorizing` 表示 MiniMax Code 正在等用户在浏览器里完成授权。 */
 export type MiniMaxLoginState = 'ready' | 'authorizing' | 'anonymous' | 'missing' | 'expired' | 'error'
@@ -255,6 +257,9 @@ export class MiniMaxAuth {
     }
     if (status.status === BROKER_EXPIRED) {
       return { ...base, state: 'expired', detail: 'MiniMax Code 登录态已过期，请重新登录。' }
+    }
+    if (status.status === BROKER_LOGOUT_PENDING) {
+      return { ...base, state: 'anonymous', detail: 'MiniMax Code 正在退出登录，请重新登录后再试。' }
     }
     if (status.status === BROKER_AUTHORIZING) {
       const pending = this.readPendingAuthorization()

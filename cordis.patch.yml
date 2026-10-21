@@ -9,4 +9,4 @@
 # — carries the npm scope.
 - insert:
     - id: dsh-connect-minmax
-      name: dsh-connect-minmax
+      name: '@dmh2002/dsh-connect-minmax'

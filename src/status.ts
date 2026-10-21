@@ -68,16 +68,27 @@ export interface MiniMaxStatusModel {
   thinkingMode: 'switchable' | 'forced'
 }
 
-/** 状态路由的应答文档。 */
-export interface MiniMaxStatusPayload {
-  /** 请求是否被完整回答。降级也算 answered，只有"路由本身坏了"才是 false。 */
-  ok: boolean
-  /** 本插件的 LLM 路由名。 */
-  route: 'minimax'
+/** 一条路由（一个区域）的状态。 */
+export interface MiniMaxStatusRoute {
+  route: string
   region: MiniMaxStatusRegion
   regionLabel: string
   baseUrl: string
   login: MiniMaxStatusLogin
+}
+
+/** 状态路由的应答文档。 */
+export interface MiniMaxStatusPayload {
+  /** 请求是否被完整回答。降级也算 answered，只有"路由本身坏了"才是 false。 */
+  ok: boolean
+  /** 主路由名（`minimax`，或只启用国际版时的 `minimax-global`）。 */
+  route: string
+  region: MiniMaxStatusRegion
+  regionLabel: string
+  baseUrl: string
+  login: MiniMaxStatusLogin
+  /** 每个区域一条；顺序与注册顺序一致。 */
+  routes: MiniMaxStatusRoute[]
   models: MiniMaxStatusModel[]
   pluginVersion: string
   /** 本次探测的时间戳（epoch ms）。 */
@@ -131,9 +142,19 @@ export interface MiniMaxStatusModelSpec {
   thinkingMode: 'switchable' | 'forced'
 }
 
+/** 一条已注册路由的凭据面与元数据。 */
+export interface MiniMaxStatusRouteDeps {
+  route: string
+  region: MiniMaxStatusRegion
+  regionLabel: string
+  baseUrl: string
+  auth: MiniMaxStatusAuth
+}
+
 /** 注册状态路由所需的依赖。 */
 export interface MiniMaxStatusDeps {
-  auth: MiniMaxStatusAuth
+  /** 已注册的路由；至少一条。 */
+  routes: readonly MiniMaxStatusRouteDeps[]
   models: readonly MiniMaxStatusModelSpec[]
   version: string
 }
@@ -276,14 +297,28 @@ export async function buildMiniMaxStatus(
   deps: MiniMaxStatusDeps,
   nowMs: number = Date.now(),
 ): Promise<MiniMaxStatusPayload> {
-  const login = await inspectWithTimeout(deps.auth)
+  const routes = await Promise.all(deps.routes.map(async entry => ({
+    route: entry.route,
+    region: entry.region,
+    regionLabel: entry.regionLabel,
+    baseUrl: entry.baseUrl,
+    login: await inspectWithTimeout(entry.auth),
+  })))
+  const primary = routes[0] ?? {
+    route: MINIMAX_STATUS_ROUTE,
+    region: 'cn' as const,
+    regionLabel: '国内版',
+    baseUrl: '',
+    login: { state: 'error' as const, source: 'none' as const, detail: '没有已注册的路由。' },
+  }
   return {
     ok: true,
-    route: MINIMAX_STATUS_ROUTE,
-    region: deps.auth.region,
-    regionLabel: deps.auth.regionLabel,
-    baseUrl: deps.auth.baseUrl,
-    login,
+    route: primary.route,
+    region: primary.region,
+    regionLabel: primary.regionLabel,
+    baseUrl: primary.baseUrl,
+    login: primary.login,
+    routes,
     models: toStatusModels(deps.models),
     pluginVersion: deps.version,
     checkedAt: nowMs,
@@ -328,13 +363,15 @@ export function registerMiniMaxStatusRoute(
         // 兜底：这一层不该被走到（buildMiniMaxStatus 自己已经兜住了），
         // 但"状态路由 500"会让卡片什么都看不到，所以这里回一份**可读**的
         // 降级文档而不是错误体。
+        const fallback = deps.routes[0]
         json(res, 200, {
           ok: false,
-          route: MINIMAX_STATUS_ROUTE,
-          region: deps.auth.region,
-          regionLabel: deps.auth.regionLabel,
-          baseUrl: deps.auth.baseUrl,
+          route: fallback?.route ?? MINIMAX_STATUS_ROUTE,
+          region: fallback?.region ?? 'cn',
+          regionLabel: fallback?.regionLabel ?? '国内版',
+          baseUrl: fallback?.baseUrl ?? '',
           login: { state: 'error', source: 'none', detail: safeMessage(error) },
+          routes: [],
           models: toStatusModels(deps.models),
           pluginVersion: deps.version,
           checkedAt: Date.now(),

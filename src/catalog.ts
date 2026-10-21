@@ -45,8 +45,32 @@
 
 import type { Api, Model } from '@earendil-works/pi-ai'
 
-/** 本插件注册的 LLM 路由名。 */
+/** 国内版路由名（也是默认路由）。 */
 export const ROUTE = 'minimax'
+/** 国际版路由名。 */
+export const ROUTE_GLOBAL = 'minimax-global'
+
+/**
+ * 每个区域一条供应商路由。
+ *
+ * 为什么是两条路由而不是一条：两个区域是**两套凭据**（`~/.minimax/auth/prod/cn`
+ * 与 `.../en`），一个 token 只在它自己的区域有效。合成一条路由就没法同时表达
+ * "国内版已登录、国际版没登录"。
+ */
+export const MINIMAX_ROUTES: Readonly<Record<MiniMaxRegion, string>> = {
+  cn: ROUTE,
+  global: ROUTE_GLOBAL,
+}
+
+/** 区域 → 路由名。 */
+export function routeForRegion(region: MiniMaxRegion): string {
+  return MINIMAX_ROUTES[region]
+}
+
+/** 区域 → 模型选择器里的供应商显示名。 */
+export function displayNameForRegion(region: MiniMaxRegion): string {
+  return region === 'global' ? 'MiniMax Global（本机登录）' : 'MiniMax（本机登录）'
+}
 
 /** 国内版（cn）托管 LLM base URL。**少写一段 `/v1`**：pi-ai 自己拼 `/v1/messages`。 */
 export const DEFAULT_BASE_URL_CN = 'https://agent.minimax.cn/mavis/api/v1/llm'
@@ -208,12 +232,12 @@ const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const
  *    `output_config:{effort}`；同时它会关掉 Anthropic 的 interleaved-thinking beta 头，
  *    避免把 Claude 专有 beta 发给 MiniMax。
  */
-export function toPiModel(spec: MiniMaxModelSpec, baseUrl: string): Model<Api> {
+export function toPiModel(spec: MiniMaxModelSpec, baseUrl: string, route: string = ROUTE): Model<Api> {
   const model: Model<Api> = {
     id: spec.id,
     name: spec.name,
     api: 'anthropic-messages' as const,
-    provider: ROUTE,
+    provider: route,
     baseUrl,
     reasoning: spec.reasoning,
     input: [...spec.input],

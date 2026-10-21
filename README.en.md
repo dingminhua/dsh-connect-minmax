@@ -51,9 +51,10 @@ Known gaps: the host only has text/image modalities, so **video input cannot be 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `models` | `[]` | enabled model ids; empty = the whole catalog |
-| `region` | `auto` | `auto` / `cn` / `global`; `auto` follows the local sign-in |
+| `regions` | `["cn","global"]` | which regions to register: `cn` → route `minimax`, `global` → route `minimax-global` |
 | `streamIdleTimeoutMs` | `300000` | upstream idle timeout |
-| `baseUrl` | empty | override the hosted base URL (no trailing `/v1`; the SDK appends `/v1/messages`) |
+| `baseUrl` | empty | override the **domestic (CN)** hosted base URL (no trailing `/v1`; the SDK appends `/v1/messages`) |
+| `globalBaseUrl` | empty | override the **international (Global)** hosted base URL (same rule) |
 | `longContext` | `false` | use the 1M context tier (`M3` / `M3.1-Flash`); upstream bills it as higher usage |
 
 ## Diagnostics

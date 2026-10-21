@@ -39,8 +39,17 @@ export const MINIMAX_GITHUB_URL = 'https://github.com/dingminhua/dsh-connect-min
  * 注册多种拼法是安全的：keyed 槽位里每个 key 各自独立，不存在冲突。
  */
 export const MINIMAX_CARD_KEYS: readonly string[] = [
+  // bundle 级：包标识（scoped 名与裸名都注册，宿主用哪个都能命中）
+  '@dmh2002/dsh-connect-minmax',
   'dsh-connect-minmax',
+  // 宿主实测用的是带 include: 前缀的行 id，两种包名各留一份
   'include:dsh-connect-minmax',
+  'include:@dmh2002/dsh-connect-minmax',
+  // row 级：`<包标识>#<行 id>`
+  '@dmh2002/dsh-connect-minmax#dsh-connect-minmax',
+  '@dmh2002/dsh-connect-minmax#include:dsh-connect-minmax',
+  'dsh-connect-minmax#dsh-connect-minmax',
+  'dsh-connect-minmax#include:dsh-connect-minmax',
 ]
 
 /** 卡片要展示的登录态分类。 */
@@ -76,6 +85,15 @@ export interface MiniMaxModelView {
   thinkingMode: 'switchable' | 'forced'
 }
 
+/** 一条供应商路由（一个区域）的状态。 */
+export interface MiniMaxRouteView {
+  route: string
+  region: 'cn' | 'global'
+  regionLabel: string
+  baseUrl: string
+  login: MiniMaxLoginView
+}
+
 /** 状态路由的应答文档。 */
 export interface MiniMaxStatusView {
   ok: boolean
@@ -83,7 +101,10 @@ export interface MiniMaxStatusView {
   region: 'cn' | 'global'
   regionLabel: string
   baseUrl: string
+  /** 主路由的登录态（保留给只认识单区域字段的旧卡片）。 */
   login: MiniMaxLoginView
+  /** 每个区域一条：国内 `minimax`、国际 `minimax-global`。 */
+  routes: MiniMaxRouteView[]
   models: MiniMaxModelView[]
   pluginVersion: string
   checkedAt: number
@@ -170,6 +191,8 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
   const expiresAtMs = finiteNumberOf(rawLogin['expiresAtMs'])
   const detail = stringOf(rawLogin['detail'])
 
+  const routes = parseRoutes(raw['routes'])
+
   return {
     ok: raw['ok'] === true,
     route: 'minimax',
@@ -185,10 +208,51 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
       ...(pendingCode === undefined ? {} : { userCode: pendingCode }),
       ...(pendingUri === undefined ? {} : { verificationUri: pendingUri }),
     },
+    routes,
     models,
     pluginVersion: stringOf(raw['pluginVersion']) ?? 'dev',
     checkedAt: finiteNumberOf(raw['checkedAt']) ?? 0,
   }
+}
+
+/**
+ * 解析 `routes`：每行独立收窄，坏行丢弃、好行保留。
+ *
+ * 缺省（旧版本插件）返回空数组 —— 卡片此时退回只看顶层 `login`。
+ */
+function parseRoutes(value: unknown): MiniMaxRouteView[] {
+  if (!Array.isArray(value)) return []
+  const routes: MiniMaxRouteView[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const row = entry as Record<string, unknown>
+    const route = stringOf(row['route'])
+    if (route === undefined) continue
+    const loginRaw = (typeof row['login'] === 'object' && row['login'] !== null && !Array.isArray(row['login']))
+      ? row['login'] as Record<string, unknown>
+      : {}
+    const userCode = stringOf(loginRaw['userCode'])
+    const verificationUri = stringOf(loginRaw['verificationUri'])
+    const generation = finiteNumberOf(loginRaw['generation'])
+    const expiresAtMs = finiteNumberOf(loginRaw['expiresAtMs'])
+    const detail = stringOf(loginRaw['detail'])
+    routes.push({
+      route,
+      region: row['region'] === 'global' ? 'global' : 'cn',
+      regionLabel: stringOf(row['regionLabel']) ?? (row['region'] === 'global' ? '国际版' : '国内版'),
+      baseUrl: stringOf(row['baseUrl']) ?? '',
+      login: {
+        state: loginStateOf(loginRaw['state']),
+        source: loginSourceOf(loginRaw['source']),
+        ...(generation === undefined ? {} : { generation }),
+        ...(expiresAtMs === undefined ? {} : { expiresAtMs }),
+        ...(detail === undefined ? {} : { detail }),
+        ...(userCode === undefined ? {} : { userCode }),
+        ...(verificationUri === undefined ? {} : { verificationUri }),
+      },
+    })
+  }
+  return routes
 }
 
 /**

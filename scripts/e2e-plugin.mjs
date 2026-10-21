@@ -20,14 +20,13 @@ const { apply } = await import(join(here, '..', 'lib', 'index.js'))
 const model = process.argv[2]?.startsWith('--') ? 'MiniMax-M3.1-Flash' : (process.argv[2] ?? 'MiniMax-M3.1-Flash')
 const withTools = process.argv.includes('--tools')
 
-const captured = {}
+const captured = { adapters: new Map() }
 const ctx = {
   logger: { info: (...a) => console.log('  [info]', ...a), warn: (...a) => console.log('  [warn]', ...a), debug: () => {}, error: (...a) => console.error('  [error]', ...a) },
   llm: {
     listProviders: () => [],
     registerAdapter: (routes, adapter) => {
-      captured.routes = routes
-      captured.adapter = adapter
+      for (const route of routes) captured.adapters.set(route, adapter)
       return () => {}
     },
   },
@@ -35,15 +34,18 @@ const ctx = {
   inject: () => {},
 }
 
-apply(ctx, { models: [], region: 'auto', streamIdleTimeoutMs: 300_000, baseUrl: '' })
-const adapter = captured.adapter
-if (!adapter) throw new Error('apply() 没有注册 adapter')
-console.log('routes:', captured.routes)
+apply(ctx, { models: [], regions: ['cn', 'global'], streamIdleTimeoutMs: 300_000, baseUrl: '' })
 
-const models = await adapter.listModels('minimax')
+// 两条路由各一个 adapter；用 --route=minimax-global 可切到国际版。
+const route = process.argv.find(arg => arg.startsWith('--route='))?.slice('--route='.length) ?? 'minimax'
+const adapter = captured.adapters.get(route)
+if (!adapter) throw new Error(`apply() 没有注册路由 ${route}（已注册：${[...captured.adapters.keys()].join(', ')}）`)
+console.log('routes:', [...captured.adapters.keys()].join(', '))
+
+const models = await adapter.listModels(route)
 console.log('models:', models.map(m => m.id).join(', '))
 for (const info of models) {
-  const resolved = await adapter.resolveModel('minimax', info.id)
+  const resolved = await adapter.resolveModel(route, info.id)
   console.log(`  ${info.id}: ctx=${resolved.context?.contextWindow} efforts=[${resolved.reasoning?.efforts.map(e => e.id).join(',') ?? ''}] default=${resolved.reasoning?.defaultEffort ?? '-'}`)
 }
 
@@ -51,7 +53,7 @@ const tools = withTools
   ? [{ name: 'get_weather', description: '查询城市天气', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } }]
   : undefined
 
-const call = await adapter.prepareCall('minimax', model)
+const call = await adapter.prepareCall(route, model)
 console.log(`\n== stream ${model}${withTools ? ' (tools)' : ''} ==`)
 const started = Date.now()
 let text = ''

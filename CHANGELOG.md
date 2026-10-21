@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+双区域支持，并按产品名收拢标识与图标。
+
+- **国内 + 国际两条路由**：`minimax`（显示名「MiniMax（本机登录）」）与
+  `minimax-global`（「MiniMax Global（本机登录）」），各读自己区域的凭据
+  （`~/.minimax/auth/prod/cn` / `.../en`）。配置项 `region` 换成 `regions: ["cn","global"]`。
+- 新增 `globalBaseUrl`，用于覆盖国际版托管地址（`baseUrl` 仍管国内版）。
+- **包名收拢到 scope**：`@dmh2002/dsh-connect-minmax`；插件行 id 仍是 `dsh-connect-minmax`，
+  设置命名空间与状态路由 `/plugins/dsh-connect-minmax/status` 不变。
+- **图标换成 MiniMax Code 的应用图标**（`icons/*.png`），不再用自绘字形。
+- 设置卡片：顶部徽标改为跨区域聚合；新增「路由」表（供应商 / 区域 / 登录态 / 到期），
+  未就绪的区域逐条给出去哪儿登录的建议。
+- 设备码登录等待期（broker `authorizing`）单独成一档状态，卡片显示验证码与授权链接；
+  `logout_pending` 归入"需要登录"而不是报错。
+- 卡片同时注册 scoped 与裸包名的槽位 key，避免改名后卡片注册不上。
+
 ## 0.2.0
 
 对齐 MiniMax Code 自己的模型目录与线上协议（依据：`~/.minimax/config.yaml` 的远端快照、
