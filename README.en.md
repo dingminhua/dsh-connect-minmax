@@ -51,6 +51,9 @@ thinking field at all (and is not offered for models that refuse it).
 ```bash
 node scripts/verify-upstream.mjs          # sign-in state and a minimal request
 node scripts/verify-upstream.mjs --full   # plus thinking, tools and streaming
+
+pnpm build && node scripts/e2e-plugin.mjs           # one real call through the plugin's own adapter
+node scripts/e2e-plugin.mjs MiniMax-M3 --tools      # with a tool call
 ```
 
 The settings card shows the login source (broker lease vs local file), region, expiry, model catalog and the

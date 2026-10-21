@@ -90,8 +90,11 @@ Harness  ──pi-ai anthropic-messages──▶  https://agent.minimax.cn/mavis
 想确认上游是否通（不经 Harness）：
 
 ```bash
-node scripts/verify-upstream.mjs          # 登录态 + 最小请求
+node scripts/verify-upstream.mjs          # 登录态 + 最小请求（直连上游）
 node scripts/verify-upstream.mjs --full   # 再加 thinking / 工具 / 流式
+
+pnpm build && node scripts/e2e-plugin.mjs              # 走插件自己的适配器跑一轮真实对话
+node scripts/e2e-plugin.mjs MiniMax-M3 --tools         # 带工具调用
 ```
 
 ## 开发
