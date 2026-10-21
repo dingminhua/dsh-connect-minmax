@@ -1,0 +1,14 @@
+node_modules/
+lib/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+.dsh-npm-cache/
+.pnpm-store/
+*.tsbuildinfo
+# 本地 npm 配置：可能内含 _authToken（发布凭据），绝不入库
+.npmrc

@@ -1,0 +1,12 @@
+# Register the MiniMax provider without changing the profile's default model.
+# The plugin reuses the MiniMax Code (mcode) desktop app's sign-in: it reads
+# the local login state and never asks for an API key.
+#
+# `id` deliberately stays the unscoped `dsh-connect-minmax`: it is the entry id,
+# the settings namespace (`settingsNamespaceOf`), and the `/plugins/<id>/…`
+# route prefix. Renaming it would silently orphan every existing install's saved
+# config. Only `name` — the package resolved through the profile's node_modules
+# — carries the npm scope.
+- insert:
+    - id: dsh-connect-minmax
+      name: dsh-connect-minmax

@@ -1,0 +1,44 @@
+packages:
+  - '.'
+
+# 与宿主实际提供的版本对齐：DSH Desktop 0.2.1-rc.2 捆绑的是
+# `@deepseek-ai/dsh-*@0.2.1-rc.2`、`@earendil-works/pi-ai@1.1.0`、
+# `@deepseek-ai/schemastery@3.18.5`。
+#
+# 让开发树与用户实际解析到的一致，是这一块存在的全部理由：版本不同时，
+# 本地能过的类型检查在用户那边可能编译不过（或者反过来）。
+overrides:
+  '@deepseek-ai/cordis': 4.0.5
+  '@deepseek-ai/dsh-attachment': 0.2.1-rc.2
+  '@deepseek-ai/dsh-client-locale': 0.2.1-rc.2
+  '@deepseek-ai/dsh-client-ui-primitives': 0.2.1-rc.2
+  '@deepseek-ai/dsh-client-ui-renderer': 0.2.1-rc.2
+  '@deepseek-ai/dsh-client-ui-settings': 0.2.1-rc.2
+  '@deepseek-ai/dsh-client-ui-settings-plugins': 0.2.1-rc.2
+  '@deepseek-ai/dsh-client-ui-slots': 0.2.1-rc.2
+  '@deepseek-ai/dsh-host-webserver': 0.2.1-rc.2
+  '@deepseek-ai/dsh-llm': 0.2.1-rc.2
+  '@deepseek-ai/dsh-llm-pi-ai': 0.2.1-rc.2
+  '@deepseek-ai/dsh-settings': 0.2.1-rc.2
+  '@deepseek-ai/schemastery': 3.18.5
+  '@earendil-works/pi-ai': 1.1.0
+
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
+
+# Disable pnpm 11's supply-chain release-age gate for this repo.
+#
+# WHY: pnpm 11 refuses to install a version published within `minimumReleaseAge`,
+# and CI runs with no `~/.npmrc`, so it gets pnpm's own default (a non-zero age
+# window). This plugin tracks DSH's lockstep prerelease line, which is published
+# inside that window. `pnpm install --frozen-lockfile` then aborts with
+# "The lockfile contains entries that the active policies reject" and EVERY
+# later CI step is skipped.
+#
+# That failure is invisible locally: a developer's `~/.npmrc` leaves the setting
+# at 0. Why 0 rather than raising the window: the lockfile pins exact,
+# already-reviewed versions with recorded integrity hashes — with
+# `--frozen-lockfile` there is nothing left to resolve, so the gate adds no
+# protection here while breaking every build.
+minimumReleaseAge: 0

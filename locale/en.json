@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MiniMax (local sign-in)",
+    "description": "Connects your locally signed-in MiniMax account (MiniMax Code / mcode) to DeepSeek Harness: no API key needed, the plugin reads the local sign-in and registers the minimax model provider. Its settings card shows the login source, region, and model catalog."
+  }
+}

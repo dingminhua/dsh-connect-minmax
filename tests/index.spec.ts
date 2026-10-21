@@ -1,0 +1,177 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import type { LlmProviderInfo } from '@deepseek-ai/dsh-llm'
+import { MiniMaxAdapter, PROVIDER_DISPLAY_NAME } from '../src/adapter.ts'
+import { MINIMAX_MODELS, ROUTE, regionBaseUrl } from '../src/catalog.ts'
+import { Config, apply, effectiveBaseUrl, selectModels } from '../src/index.ts'
+import { PLUGIN_VERSION } from '../src/version.ts'
+
+/**
+ * 入口测试只验证"接线"：注册了什么、过滤成什么、可选服务怎么挂。
+ * 不联网、不读真实凭据（vitest.config.ts 已把 HOME 与
+ * `DSH_MINIMAX_DATA_DIR` 隔离到临时目录）。
+ */
+
+interface FakeLlm {
+  listProviders: () => readonly LlmProviderInfo[]
+  registerAdapter: (routes: readonly string[], adapter: unknown) => unknown
+}
+
+interface Harness {
+  ctx: Context
+  registered: { routes: string[], adapter: unknown }[]
+  warnings: string[]
+  infos: string[]
+  injections: string[][]
+}
+
+/** 假宿主上下文：只实现 `apply()` 真正会碰的面。 */
+function harness(options: { providers?: readonly LlmProviderInfo[] } = {}): Harness {
+  const registered: { routes: string[], adapter: unknown }[] = []
+  const warnings: string[] = []
+  const infos: string[] = []
+  const injections: string[][] = []
+  const llm: FakeLlm = {
+    listProviders: () => options.providers ?? [],
+    registerAdapter: (routes, adapter) => {
+      registered.push({ routes: [...routes], adapter })
+      return { replace: () => undefined, dispose: () => undefined }
+    },
+  }
+  const ctx = {
+    llm,
+    logger: {
+      warn: (message: string) => warnings.push(message),
+      info: (message: string) => infos.push(message),
+    },
+    get: () => undefined,
+    inject: (names: readonly string[], _callback: (inner: unknown) => void) => {
+      injections.push([...names])
+    },
+  }
+  return { ctx: ctx as unknown as Context, registered, warnings, infos, injections }
+}
+
+/** 取出唯一一次注册的 adapter，并断言它确实是 MiniMax 的包装。 */
+function registeredAdapter(result: Harness): MiniMaxAdapter {
+  expect(result.registered).toHaveLength(1)
+  const entry = result.registered[0]!
+  expect(entry.routes).toEqual([ROUTE])
+  expect(entry.adapter).toBeInstanceOf(MiniMaxAdapter)
+  return entry.adapter as MiniMaxAdapter
+}
+
+describe('Config', () => {
+  it('给未配置字段补默认值', () => {
+    const resolved = Config({})
+    expect(resolved.models).toEqual([])
+    expect(resolved.region).toBe('auto')
+    expect(resolved.streamIdleTimeoutMs).toBe(300_000)
+    expect(resolved.baseUrl).toBe('')
+  })
+})
+
+describe('selectModels', () => {
+  it('空配置表示目录全部', () => {
+    expect(selectModels([], () => undefined)).toHaveLength(MINIMAX_MODELS.length)
+    expect(selectModels(undefined, () => undefined)).toHaveLength(MINIMAX_MODELS.length)
+  })
+
+  it('按配置顺序去重挑选', () => {
+    const selected = selectModels(['MiniMax-M2.7', ' MiniMax-M3 ', 'MiniMax-M2.7'], () => undefined)
+    expect(selected.map(spec => spec.id)).toEqual(['MiniMax-M2.7', 'MiniMax-M3'])
+  })
+
+  it('未知 id 只 warn 并忽略，其余照常注册', () => {
+    const warnings: string[] = []
+    const selected = selectModels(['MiniMax-M3', 'MiniMax-Nope'], message => warnings.push(message))
+    expect(selected.map(spec => spec.id)).toEqual(['MiniMax-M3'])
+    expect(warnings.join('\n')).toContain('MiniMax-Nope')
+  })
+
+  it('全部未知时退回完整目录，而不是注册一个空 provider', () => {
+    const warnings: string[] = []
+    const selected = selectModels(['nope'], message => warnings.push(message))
+    expect(selected).toHaveLength(MINIMAX_MODELS.length)
+    expect(warnings.join('\n')).toContain('全部未知')
+  })
+})
+
+describe('effectiveBaseUrl', () => {
+  it('空配置回落到区域默认值', () => {
+    expect(effectiveBaseUrl('', regionBaseUrl('cn'))).toBe('https://agent.minimax.cn/mavis/api/v1/llm')
+    expect(effectiveBaseUrl('   ', regionBaseUrl('global'))).toBe('https://agent.minimax.io/mavis/api/v1/llm')
+  })
+
+  it('去掉结尾斜杠：SDK 是字符串拼接，双斜杠会拼出 //v1/messages', () => {
+    expect(effectiveBaseUrl('https://example.test/mavis/api/v1/llm/', 'fallback'))
+      .toBe('https://example.test/mavis/api/v1/llm')
+  })
+})
+
+describe('PLUGIN_VERSION', () => {
+  it('构建期注入或回落到 dev，绝不抛 ReferenceError', () => {
+    expect(typeof PLUGIN_VERSION).toBe('string')
+    expect(PLUGIN_VERSION.length).toBeGreaterThan(0)
+  })
+})
+
+describe('apply', () => {
+  it('注册 minimax 路由，并让 GUI 拿到目录与默认思考档位', async () => {
+    const result = harness()
+    apply(result.ctx, {})
+
+    const adapter = registeredAdapter(result)
+    expect(adapter.providerInfo(ROUTE).name).toBe(PROVIDER_DISPLAY_NAME)
+
+    const models = await adapter.listModels(ROUTE)
+    expect(models.map(model => model.id)).toEqual(MINIMAX_MODELS.map(spec => spec.id))
+    expect(models[0]!.inputModalities).toEqual(['text', 'image'])
+
+    // 宿主未指定档位时必须落到有效档位：M3.1-Flash 不可关思考。
+    const flash = await adapter.resolveModel(ROUTE, 'MiniMax-M3.1-Flash')
+    expect(flash.reasoning?.defaultEffort).toBe('medium')
+    expect(flash.reasoning?.efforts.map(effort => effort.id)).toContain('medium')
+    expect(flash.reasoning?.efforts.map(effort => effort.id)).not.toContain('off')
+    expect(flash.context?.contextWindow).toBe(512_000)
+
+    // M3 允许关思考，因此 off 出现在档位里。
+    const m3 = await adapter.resolveModel(ROUTE, 'MiniMax-M3')
+    expect(m3.reasoning?.efforts.map(effort => effort.id)).toContain('off')
+
+    expect(result.infos.join('\n')).toContain(ROUTE)
+  })
+
+  it('路由已被占用时只 warn，不 throw、不注册', () => {
+    const result = harness({ providers: [{ id: ROUTE, name: '占位' }] })
+    expect(() => apply(result.ctx, {})).not.toThrow()
+    expect(result.registered).toHaveLength(0)
+    expect(result.warnings.join('\n')).toContain('已被其它 provider 注册')
+  })
+
+  it('按配置只注册选中的模型', async () => {
+    const result = harness()
+    apply(result.ctx, { models: ['MiniMax-M2.7'] })
+    const models = await registeredAdapter(result).listModels(ROUTE)
+    expect(models.map(model => model.id)).toEqual(['MiniMax-M2.7'])
+  })
+
+  it('baseUrl 写成带 /v1 的形式时给出可操作的 warn', () => {
+    const result = harness()
+    apply(result.ctx, { baseUrl: 'https://example.test/mavis/api/v1/llm/v1' })
+    expect(result.warnings.join('\n')).toContain('不应包含 "/v1"')
+  })
+
+  it('状态路由走 ctx.inject 等可选服务，而不是 apply 期采样', () => {
+    const result = harness()
+    apply(result.ctx, {})
+    expect(result.injections).toEqual([['webServer']])
+  })
+
+  it('不注册可配置供应商（minimax 已在 pi-ai 目录里，会 DUPLICATE_DIRECTORY）', () => {
+    const result = harness()
+    apply(result.ctx, {})
+    const llm = (result.ctx as unknown as { llm: Record<string, unknown> }).llm
+    expect(llm.registerConfigurableProviders).toBeUndefined()
+  })
+})
