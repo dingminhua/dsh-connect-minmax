@@ -8,7 +8,7 @@
 import type { Model } from '@earendil-works/pi-ai'
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, findModelSpec, modelIds, regionBaseUrl, toPiModel, type MiniMaxModelSpec } from '../src/catalog.ts'
+import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, findModelSpec, modelIds, regionBaseUrl, toPiModel, withContextWindow, type MiniMaxModelSpec } from '../src/catalog.ts'
 
 const byId = (id: string): MiniMaxModelSpec => {
   const spec = findModelSpec(id)
@@ -22,18 +22,26 @@ describe('MINIMAX_MODELS', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('包含设计要求的四个模型，顺序稳定', () => {
+  it('四个模型顺序对齐 MiniMax Code 的 model_order（Flash 在前）', () => {
     expect(modelIds()).toEqual([
-      'MiniMax-M3',
       'MiniMax-M3.1-Flash',
+      'MiniMax-M3',
       'MiniMax-M2.7',
       'MiniMax-M2.7-highspeed',
     ])
   })
 
+  it('显示名对齐 MiniMax Code（不带 MiniMax- 前缀，订阅限免带角标）', () => {
+    expect(byId('MiniMax-M3.1-Flash').name).toBe('M3.1-Flash（订阅限免）')
+    expect(byId('MiniMax-M3.1-Flash').badge).toBe('订阅限免')
+    expect(byId('MiniMax-M3').name).toBe('M3')
+    expect(byId('MiniMax-M2.7').name).toBe('M2.7')
+    expect(byId('MiniMax-M2.7-highspeed').name).toBe('M2.7-highspeed')
+  })
+
   it('MiniMax-M3：512K / 128K / 支持图片 / 可关思考', () => {
     const spec = byId('MiniMax-M3')
-    expect(spec.name).toBe('MiniMax M3')
+    expect(spec.name).toBe('M3')
     expect(spec.contextWindow).toBe(512_000)
     expect(spec.maxTokens).toBe(128_000)
     expect([...spec.input]).toEqual(['text', 'image'])
@@ -51,21 +59,33 @@ describe('MINIMAX_MODELS', () => {
     expect(spec.thinkingLevelMap?.off).toBeNull()
   })
 
-  it('MiniMax-M2.7 / M2.7-highspeed：204K / 131072 / 纯文本 / 可关思考', () => {
+  it('MiniMax-M2.7 / M2.7-highspeed：204K / 131072 / 支持图片', () => {
     for (const id of ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed']) {
       const spec = byId(id)
       expect(spec.contextWindow).toBe(204_800)
       expect(spec.maxTokens).toBe(131_072)
-      expect([...spec.input]).toEqual(['text'])
+      // 实测：M2.7 与 highspeed 都接受 base64 图片输入（HTTP 200）。
+      expect([...spec.input]).toEqual(['text', 'image'])
       expect(spec.reasoning).toBe(true)
-      expect(spec.thinkingLevelMap?.off).toBe('disabled')
     }
   })
 
-  it('每个模型都显式给出六档 effort（含 xhigh / max，否则 GUI 不展示）', () => {
+  it('M2.7 可关思考；highspeed 忽略 disabled，因此不提供 off', () => {
+    expect(byId('MiniMax-M2.7').thinkingLevelMap?.off).toBe('disabled')
+    expect(byId('MiniMax-M2.7-highspeed').thinkingLevelMap?.off).toBeNull()
+  })
+
+  it('M3 / M3.1-Flash 声明 1M 上下文档，M2.7 没有', () => {
+    expect(byId('MiniMax-M3').contextWindowOptions).toEqual([512_000, 1_000_000])
+    expect(byId('MiniMax-M3.1-Flash').contextWindowOptions).toEqual([512_000, 1_000_000])
+    expect(byId('MiniMax-M2.7').contextWindowOptions).toBeUndefined()
+  })
+
+  it('每个模型都显式给出 effort 档位：minimal 隐藏，low…max 全部可见', () => {
     for (const spec of MINIMAX_MODELS) {
       const levels = spec.thinkingLevelMap ?? {}
-      expect(levels.minimal).toBe('low')
+      // 上游 effortOptions 从 low 起，宿主多出的 minimal 没有落点 → 隐藏。
+      expect(levels.minimal).toBeNull()
       expect(levels.low).toBe('low')
       expect(levels.medium).toBe('medium')
       expect(levels.high).toBe('high')
@@ -91,6 +111,27 @@ describe('MINIMAX_MODELS', () => {
   })
 })
 
+describe('withContextWindow', () => {
+  it('关闭时原样返回（同一个对象，不多做分配）', () => {
+    const spec = byId('MiniMax-M3')
+    expect(withContextWindow(spec, false)).toBe(spec)
+  })
+
+  it('打开时把支持 1M 的模型换成 1M 档', () => {
+    expect(withContextWindow(byId('MiniMax-M3'), true).contextWindow).toBe(1_000_000)
+    expect(withContextWindow(byId('MiniMax-M3.1-Flash'), true).contextWindow).toBe(1_000_000)
+  })
+
+  it('不支持 1M 的模型保持默认档', () => {
+    expect(withContextWindow(byId('MiniMax-M2.7'), true).contextWindow).toBe(204_800)
+  })
+
+  it('不修改目录本身', () => {
+    withContextWindow(byId('MiniMax-M3'), true)
+    expect(byId('MiniMax-M3').contextWindow).toBe(512_000)
+  })
+})
+
 describe('regionBaseUrl', () => {
   it('cn 与 global 各自对应的托管 base URL', () => {
     expect(regionBaseUrl('cn')).toBe(DEFAULT_BASE_URL_CN)
@@ -111,7 +152,7 @@ describe('toPiModel', () => {
     const model = toPiModel(spec, DEFAULT_BASE_URL_CN)
 
     expect(model.id).toBe('MiniMax-M3')
-    expect(model.name).toBe('MiniMax M3')
+    expect(model.name).toBe('M3')
     expect(model.api).toBe('anthropic-messages')
     expect(model.provider).toBe(ROUTE)
     expect(model.baseUrl).toBe(DEFAULT_BASE_URL_CN)

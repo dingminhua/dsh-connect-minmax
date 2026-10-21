@@ -320,7 +320,14 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
                       <tr key={model.id}>
                         <td>
                           <div className="dsm-minimax-model-id">{model.id}</div>
-                          <div className="dsm-minimax-model-name">{model.name}</div>
+                          <div className="dsm-minimax-model-name">
+                            {model.name}
+                            {model.badge === undefined
+                              ? null
+                              : <span className="dsm-minimax-chip dsm-minimax-chip-on" style={{ marginLeft: 6 }}>
+                                  {model.badge}
+                                </span>}
+                          </div>
                         </td>
                         <td>{formatContextWindow(model.contextWindow)}</td>
                         <td>{formatContextWindow(model.maxTokens)}</td>
@@ -332,11 +339,15 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
                           </span>
                         </td>
                         <td>
-                          <span className={`dsm-minimax-chip${model.reasoning ? ' dsm-minimax-chip-on' : ''}`}>
-                            {model.reasoning
-                              ? translate('models.reasoningYes')
-                              : translate('models.reasoningNo')}
-                          </span>
+                          {model.reasoning
+                            ? (
+                              <span className="dsm-minimax-chip dsm-minimax-chip-on">
+                                {model.thinkingMode === 'forced'
+                                  ? translate('models.thinkingForced')
+                                  : translate('models.thinkingSwitchable')}
+                              </span>
+                            )
+                            : <span className="dsm-minimax-chip">{translate('models.reasoningNo')}</span>}
                         </td>
                       </tr>
                     ))}

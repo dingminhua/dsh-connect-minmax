@@ -62,10 +62,14 @@ export interface MiniMaxLoginView {
 export interface MiniMaxModelView {
   id: string
   name: string
+  /** 角标（如「订阅限免」）；缺省不显示。 */
+  badge?: string
   contextWindow: number
   maxTokens: number
   input: string[]
   reasoning: boolean
+  /** 思考形态；旧版本响应没有这个字段时按 `switchable` 处理。 */
+  thinkingMode: 'switchable' | 'forced'
 }
 
 /** 状态路由的应答文档。 */
@@ -140,15 +144,18 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
     if (id === undefined) continue
     const contextWindow = finiteNumberOf(row['contextWindow']) ?? 0
     const maxTokens = finiteNumberOf(row['maxTokens']) ?? 0
+    const badge = stringOf(row['badge'])
     models.push({
       id,
       name: stringOf(row['name']) ?? id,
+      ...badge === undefined ? {} : { badge },
       contextWindow,
       maxTokens,
       input: Array.isArray(row['input'])
         ? row['input'].filter((item): item is string => typeof item === 'string')
         : [],
       reasoning: row['reasoning'] === true,
+      thinkingMode: row['thinkingMode'] === 'forced' ? 'forced' : 'switchable',
     })
   }
 

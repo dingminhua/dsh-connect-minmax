@@ -27,15 +27,24 @@ user to sign in again in MiniMax Code.
 
 ## Models and thinking
 
-| Model | Context | Input | `off` |
-| --- | --- | --- | --- |
-| `MiniMax-M3` | 512K | text, image | yes |
-| `MiniMax-M3.1-Flash` | 512K | text, image | **no** (upstream requires thinking) |
-| `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` | 204K | text | yes |
+Names, order, context tiers and thinking shape mirror MiniMax Code's own catalog
+(`~/.minimax/config.yaml` plus the bundled `@mavis/config` catalog):
+
+| Model | Display name | Context | Max output | Input | `off` |
+| --- | --- | --- | --- | --- | --- |
+| `MiniMax-M3.1-Flash` | M3.1-Flash (subscription) | 512K (1M option) | 128K | text, image, video | **no** (forced) |
+| `MiniMax-M3` | M3 | 512K (1M option) | 128K | text, image, video | yes |
+| `MiniMax-M2.7` | M2.7 | 204.8K | 131K | text, image | yes |
+| `MiniMax-M2.7-highspeed` | M2.7-highspeed | 204.8K | 131K | text, image | **no** (upstream ignores it) |
 
 Thinking levels map to MiniMax's native `thinking: {type:'adaptive'}` + `output_config.effort`:
-`minimal`/`low` → `low`, `medium` → `medium`, `high`/`xhigh`/`max` passed through; `off` sends no
-thinking field at all (and is not offered for models that refuse it).
+`low`/`medium`/`high`/`xhigh`/`max` pass through, `off` sends `thinking:{type:'disabled'}`, and
+`minimal` is not offered (MiniMax has no level below `low`). MiniMax Code spells its M3 toggle as
+`effort: 'on'/'off'`, which the hosted gateway rejects (`invalid reasoning_effort`), so this plugin
+only sends the accepted values.
+
+Known gaps: the host only has text/image modalities, so **video input cannot be expressed**; and the
+1M context tier is exposed as the `longContext` plugin option instead of a per-model menu entry.
 
 ## Configuration
 
@@ -45,6 +54,7 @@ thinking field at all (and is not offered for models that refuse it).
 | `region` | `auto` | `auto` / `cn` / `global`; `auto` follows the local sign-in |
 | `streamIdleTimeoutMs` | `300000` | upstream idle timeout |
 | `baseUrl` | empty | override the hosted base URL (no trailing `/v1`; the SDK appends `/v1/messages`) |
+| `longContext` | `false` | use the 1M context tier (`M3` / `M3.1-Flash`); upstream bills it as higher usage |
 
 ## Diagnostics
 
@@ -54,6 +64,7 @@ node scripts/verify-upstream.mjs --full   # plus thinking, tools and streaming
 
 pnpm build && node scripts/e2e-plugin.mjs           # one real call through the plugin's own adapter
 node scripts/e2e-plugin.mjs MiniMax-M3 --tools      # with a tool call
+node scripts/verify-upstream.mjs --matrix          # per-model thinking wire forms
 ```
 
 The settings card shows the login source (broker lease vs local file), region, expiry, model catalog and the

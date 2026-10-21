@@ -27,8 +27,8 @@ import {
 } from '../src/status.ts'
 
 const MODELS: readonly MiniMaxStatusModelSpec[] = [
-  { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 512_000, maxTokens: 128_000, input: ['text', 'image'], reasoning: true },
-  { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', contextWindow: 204_800, maxTokens: 131_072, input: ['text'], reasoning: true },
+  { id: 'MiniMax-M3', name: 'M3', contextWindow: 512_000, maxTokens: 128_000, input: ['text', 'image'], reasoning: true, thinkingMode: 'switchable' },
+  { id: 'MiniMax-M2.7', name: 'M2.7', contextWindow: 204_800, maxTokens: 131_072, input: ['text', 'image'], reasoning: true, thinkingMode: 'switchable' },
 ]
 
 /** 一个可控的凭据面替身。 */
@@ -156,7 +156,7 @@ describe('safeMessage', () => {
 
 describe('toStatusModels', () => {
   it('input 变成独立副本（不共享原数组）', () => {
-    const source: MiniMaxStatusModelSpec = { id: 'x', name: 'X', contextWindow: 1, maxTokens: 1, input: ['text'], reasoning: false }
+    const source: MiniMaxStatusModelSpec = { id: 'x', name: 'X', contextWindow: 1, maxTokens: 1, input: ['text'], reasoning: false, thinkingMode: 'forced' }
     const projected = toStatusModels([source])
     expect(projected[0]?.input).toEqual(['text'])
     expect(projected[0]?.input).not.toBe(source.input)

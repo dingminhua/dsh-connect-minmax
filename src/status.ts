@@ -54,10 +54,14 @@ export interface MiniMaxStatusLogin {
 export interface MiniMaxStatusModel {
   id: string
   name: string
+  /** 卡片角标，例如「订阅限免」。 */
+  badge?: string
   contextWindow: number
   maxTokens: number
   input: string[]
   reasoning: boolean
+  /** 思考形态：可关闭 / 强制开启。卡片据此显示"思考"一列。 */
+  thinkingMode: 'switchable' | 'forced'
 }
 
 /** 状态路由的应答文档。 */
@@ -113,10 +117,12 @@ export interface MiniMaxStatusAuth {
 export interface MiniMaxStatusModelSpec {
   id: string
   name: string
+  badge?: string
   contextWindow: number
   maxTokens: number
   input: readonly string[]
   reasoning: boolean
+  thinkingMode: 'switchable' | 'forced'
 }
 
 /** 注册状态路由所需的依赖。 */
@@ -176,8 +182,10 @@ export function toStatusModels(models: readonly MiniMaxStatusModelSpec[]): MiniM
   return models.map(model => ({
     id: model.id,
     name: model.name,
+    ...model.badge === undefined ? {} : { badge: model.badge },
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    thinkingMode: model.thinkingMode,
     input: [...model.input],
     reasoning: model.reasoning,
   }))

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+对齐 MiniMax Code 自己的模型目录与线上协议（依据：`~/.minimax/config.yaml` 的远端快照、
+随包的 `@mavis/config` 目录源码、以及逐模型实测）。
+
+- 模型顺序改为 `M3.1-Flash` → `M3` → `M2.7` → `M2.7-highspeed`（即 mcode 的 `model_order`）。
+- 显示名对齐 mcode：`M3.1-Flash（订阅限免）`、`M3`、`M2.7`、`M2.7-highspeed`，并带「订阅限免」角标。
+- `M2.7` / `M2.7-highspeed` 打开图片输入（实测可收 base64 图片）。
+- 新增 `longContext` 开关：`M3` / `M3.1-Flash` 可切 1M 上下文档（mcode 的 `contextWindowOptions`）。
+- 思考档位只发网关真正接受的 `low` / `medium` / `high` / `xhigh` / `max`；去掉 `minimal`
+  （MiniMax 没有这一档），也不再使用 mcode 里那套会被 400 的 `on` / `off` 拼写。
+- `M2.7-highspeed` 不再提供「关闭思考」（上游忽略 `disabled`，开关名不副实）。
+- `verify-upstream.mjs` 新增 `--matrix`：逐模型核对 thinking 的线上形态。
+
 ## 0.1.0
 
 首个版本：把本机已登录的 MiniMax（MiniMax Code / mcode）账号接入 DeepSeek Harness。

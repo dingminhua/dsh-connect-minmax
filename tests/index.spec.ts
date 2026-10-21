@@ -68,6 +68,7 @@ describe('Config', () => {
     expect(resolved.region).toBe('auto')
     expect(resolved.streamIdleTimeoutMs).toBe(300_000)
     expect(resolved.baseUrl).toBe('')
+    expect(resolved.longContext).toBe(false)
   })
 })
 
@@ -140,6 +141,19 @@ describe('apply', () => {
     expect(m3.reasoning?.efforts.map(effort => effort.id)).toContain('off')
 
     expect(result.infos.join('\n')).toContain(ROUTE)
+  })
+
+  it('longContext 打开后，只有支持 1M 的模型换档', async () => {
+    const result = harness()
+    apply(result.ctx, { longContext: true })
+
+    const adapter = registeredAdapter(result)
+    const flash = await adapter.resolveModel(ROUTE, 'MiniMax-M3.1-Flash')
+    const m3 = await adapter.resolveModel(ROUTE, 'MiniMax-M3')
+    const m27 = await adapter.resolveModel(ROUTE, 'MiniMax-M2.7')
+    expect(flash.context?.contextWindow).toBe(1_000_000)
+    expect(m3.context?.contextWindow).toBe(1_000_000)
+    expect(m27.context?.contextWindow).toBe(204_800)
   })
 
   it('路由已被占用时只 warn，不 throw、不注册', () => {

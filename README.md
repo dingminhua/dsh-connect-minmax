@@ -15,7 +15,8 @@
 | 会不会过期 | 会。租约拿到的 token 由 MiniMax Code 负责续期；插件在 401 时自动重新租一次并重试一次 |
 | 要不要填 API Key | 不要。插件没有 Key 输入框，配置里也没有这个字段 |
 | 会不会偷写文件 | 不会。插件对 `~/.minimax` **只读**，不写凭据、不建锁、不刷新 refresh token |
-| 支持哪些模型 | `MiniMax-M3`、`MiniMax-M3.1-Flash`、`MiniMax-M2.7`、`MiniMax-M2.7-highspeed`（可在配置里裁剪） |
+| 支持哪些模型 | `MiniMax-M3.1-Flash`（订阅限免）、`MiniMax-M3`、`MiniMax-M2.7`、`MiniMax-M2.7-highspeed`（可在配置里裁剪） |
+| 和 MiniMax Code 一致吗 | 模型名、顺序、上下文档位、思考形态都对齐它的目录；差异见下面的[对照表](#和-minimax-code-的对照) |
 
 ## 安装
 
@@ -29,23 +30,46 @@
 ## 使用
 
 1. 确保 **MiniMax Code 已打开并处于登录状态**（插件本身不提供登录界面）。
-2. 在 Harness 里把模型切到 `MiniMax-M3.1-Flash`（订阅限免、强制思考）或 `MiniMax-M3`。
-3. 思考档位按模型提供：`off / minimal / low / medium / high / xhigh / max`。
-   `MiniMax-M3.1-Flash` **没有 `off`**——上游要求它必须思考，发"关闭思考"会被 400 拒绝。
+2. 在 Harness 里把模型切到 `M3.1-Flash（订阅限免）`（强制思考、订阅期内不计费）或 `M3`。
+3. 思考档位按模型提供：`off / low / medium / high / xhigh / max`。
+   - `M3.1-Flash` 与 `M2.7-highspeed` **没有 `off`**：前者上游要求必须思考（发 disabled 会 400），
+     后者会忽略 disabled 照样思考，给一个关不掉的开关只会误导。
+   - `minimal` 也不提供：MiniMax 的档位从 `low` 起，宿主多出来的这一档没有落点。
 4. 打开 **设置 → 插件 → MiniMax（本机登录）** 可以看到登录来源、区域、到期时间与模型目录。
 
 ### 思考档位怎么映射
 
 MiniMax 的原生控制是 `thinking: {type:'adaptive'}` + `output_config.effort`，插件按这个走：
 
-| Harness 档位 | 上游 effort |
+| Harness 档位 | 上游 `output_config.effort` |
 | --- | --- |
-| `off` | 不发 `thinking`（M3.1-Flash 不提供此档） |
-| `minimal` / `low` | `low` |
+| `off` | 不发 `output_config`，只发 `thinking:{type:'disabled'}`（强制思考模型不提供此档） |
+| `low` | `low` |
 | `medium` | `medium` |
 | `high` | `high` |
 | `xhigh` | `xhigh` |
 | `max` | `max` |
+
+MiniMax Code 自己的 M3 是一个"开/关"开关，它在代码里拼出的 `effort: 'on'/'off'`
+**在当前托管网关上会被 400 拒绝**（`invalid reasoning_effort`，合法值只有
+`low/medium/high/xhigh/max`）。插件按网关实际接受的取值来发，这也是为什么
+档位表里没有 `on`/`off` 这两个拼写。
+
+### 和 MiniMax Code 的对照
+
+模型名、顺序、上下文档位与思考形态，来自 MiniMax Code 自己用的目录
+（`~/.minimax/config.yaml` 的远端快照 + 随包的 `@mavis/config` 目录）：
+
+| 模型 | 显示名 | 上下文 | 最大输出 | 输入 | 思考 | 关得掉吗 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `MiniMax-M3.1-Flash` | M3.1-Flash（订阅限免） | 512K（可切 1M） | 128K | 文本 / 图片 / 视频 | 强制 | 否 |
+| `MiniMax-M3` | M3 | 512K（可切 1M） | 128K | 文本 / 图片 / 视频 | 可切换 | 是 |
+| `MiniMax-M2.7` | M2.7 | 204.8K | 131K | 文本 / 图片 | 可切换 | 是 |
+| `MiniMax-M2.7-highspeed` | M2.7-highspeed | 204.8K | 131K | 文本 / 图片 | 强制 | 否（上游忽略关闭） |
+
+**已知差异**：宿主只有「文本 / 图片」两种输入模态，**视频输入表达不了**；
+1M 上下文在 MiniMax Code 里是模型菜单里的可选档位，在宿主里做成了插件开关
+`longContext`（默认关，上游对 1M 档按更高用量计费）。
 
 ## 工作原理
 
@@ -75,6 +99,7 @@ Harness  ──pi-ai anthropic-messages──▶  https://agent.minimax.cn/mavis
 | `region` | `auto` | `auto` / `cn` / `global`；`auto` 跟随本机登录态 |
 | `streamIdleTimeoutMs` | `300000` | 上游空闲超时 |
 | `baseUrl` | 空 | 覆盖托管 base URL（**不要**带 `/v1`，SDK 会自己拼 `/v1/messages`） |
+| `longContext` | `false` | 用 1M 上下文档（仅 `M3` / `M3.1-Flash`）；上游按更高用量计费 |
 
 ## 故障排查
 
@@ -95,6 +120,7 @@ node scripts/verify-upstream.mjs --full   # 再加 thinking / 工具 / 流式
 
 pnpm build && node scripts/e2e-plugin.mjs              # 走插件自己的适配器跑一轮真实对话
 node scripts/e2e-plugin.mjs MiniMax-M3 --tools         # 带工具调用
+node scripts/verify-upstream.mjs --matrix             # 逐模型核对 thinking 的线上形态
 ```
 
 ## 开发

@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type { PiAiAdapterOptions, ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import { INERT_AUTH, MiniMaxAdapter, PROVIDER_DISPLAY_NAME, createMiniMaxProvider } from './adapter.ts'
 import { MiniMaxAuth } from './auth.ts'
-import { MINIMAX_MODELS, ROUTE, regionBaseUrl } from './catalog.ts'
+import { MINIMAX_MODELS, ROUTE, regionBaseUrl, withContextWindow } from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import { registerMiniMaxStatusRoute } from './status.ts'
 import type { MiniMaxStatusAuth, MiniMaxStatusContext } from './status.ts'
@@ -71,6 +71,14 @@ export interface MiniMaxConfig {
   streamIdleTimeoutMs?: number
   /** 覆盖托管 LLM base URL；留空表示按区域默认值。 */
   baseUrl?: string
+  /**
+   * 使用 1M 长上下文档（仅 `M3` / `M3.1-Flash` 支持）。
+   *
+   * MiniMax Code 把它做成用户在模型菜单里可选的档位，并在 1M 档标注
+   * "higher_usage"；DSH 每个模型只有一个 `contextWindow`，所以这里做成插件开关。
+   * 默认关：1M 档在上游按更高用量计费。
+   */
+  longContext?: boolean
 }
 
 /** 配置 schema：值经过 schemastery 校验/补默认后才进 `apply()`。 */
@@ -87,6 +95,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .string()
     .default('')
     .description('覆盖托管 LLM base URL（形如 https://agent.minimax.cn/mavis/api/v1/llm，不要带 /v1）。'),
+  longContext: z
+    .boolean()
+    .default(false)
+    .description('用 1M 长上下文（M3 / M3.1-Flash）；上游按更高用量计费，默认关。'),
 }) as unknown as z<MiniMaxConfig>
 
 /**
@@ -164,7 +176,8 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   const requestedRegion = config.region ?? 'auto'
   const auth = new MiniMaxAuth({ region: requestedRegion })
-  const models = selectModels(config.models, warn)
+  const longContext = config.longContext ?? false
+  const models = selectModels(config.models, warn).map(spec => withContextWindow(spec, longContext))
   const baseUrl = effectiveBaseUrl(config.baseUrl, regionBaseUrl(auth.region))
 
   // 常见写法错误：把 SDK 自己要拼的路径写进了 baseUrl，结果是 .../v1/v1/messages。

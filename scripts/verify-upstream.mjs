@@ -10,6 +10,7 @@
  * 用法：
  *   node scripts/verify-upstream.mjs            # 只查登录态与 token 可用性
  *   node scripts/verify-upstream.mjs --full     # 额外验证 thinking / 工具 / 流式
+ *   node scripts/verify-upstream.mjs --matrix   # 逐模型核对 mcode 的 thinking 线上形态
  *   node scripts/verify-upstream.mjs --json     # 机器可读输出
  *
  * 退出码：0 全部通过；1 有失败项；2 没有可用登录。
@@ -30,6 +31,7 @@ const MODEL = process.env.DSH_MINIMAX_MODEL ?? 'MiniMax-M3'
 
 const argv = new Set(process.argv.slice(2))
 const FULL = argv.has('--full')
+const MATRIX = argv.has('--matrix')
 const AS_JSON = argv.has('--json')
 const results = []
 const record = (name, ok, detail) => {
@@ -192,6 +194,7 @@ async function main() {
   }
 
   await call({ model: MODEL, max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] }, `messages（${MODEL}）`)
+  if (MATRIX) return finish(await thinkingMatrix(call))
   if (!FULL) return finish(0)
 
   // 3. thinking
@@ -224,6 +227,52 @@ async function main() {
   }
 
   return finish(results.every(item => item.ok) ? 0 : 1)
+}
+
+
+/**
+ * 逐模型核对 mcode 自己的 thinking 线上形态（依据 MiniMax Code 的
+ * `@mavis/local-runtime/src/model-provider/thinking.ts`）：
+ *
+ *   - MiniMax-M3 只有 on/off：`thinking:{type:'adaptive'}` 配 `output_config.effort:'on'`，
+ *     关闭时 `thinking:{type:'disabled'}` 且不带 output_config；
+ *   - 其他模型把用户选的 effort 原样放进 `output_config.effort`（含 `default`）。
+ *
+ * 任何一项失败都意味着插件与 MiniMax Code 的真实行为不一致。
+ */
+/** 1×1 红色 PNG。 */
+const TINY_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+
+async function thinkingMatrix(call) {
+  const prompts = [{ role: 'user', content: '一句话解释递归' }]
+  const cases = [
+    ['MiniMax-M3', { thinking: { type: 'adaptive' }, output_config: { effort: 'on' } }, 'M3 adaptive + effort=on'],
+    ['MiniMax-M3', { thinking: { type: 'disabled' } }, 'M3 disabled（无 output_config）'],
+    ['MiniMax-M3.1-Flash', { thinking: { type: 'adaptive' }, output_config: { effort: 'default' } }, 'M3.1-Flash adaptive + effort=default'],
+    ['MiniMax-M3.1-Flash', { thinking: { type: 'adaptive' }, output_config: { effort: 'low' } }, 'M3.1-Flash adaptive + effort=low'],
+    ['MiniMax-M2.7', { thinking: { type: 'adaptive' }, output_config: { effort: 'on' } }, 'M2.7 adaptive + effort=on'],
+    ['MiniMax-M2.7-highspeed', { thinking: { type: 'disabled' } }, 'M2.7-highspeed disabled'],
+    ['MiniMax-M3', { thinking: { type: 'adaptive' } }, 'M3 adaptive（无 effort）'],
+    ['MiniMax-M3', { thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }, 'M3 adaptive + effort=medium'],
+    ['MiniMax-M3.1-Flash', { thinking: { type: 'adaptive' }, output_config: { effort: 'xhigh' } }, 'M3.1-Flash adaptive + effort=xhigh'],
+    ['MiniMax-M2.7', { thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }, 'M2.7 adaptive + effort=medium'],
+    ['MiniMax-M2.7', { thinking: { type: 'adaptive' } }, 'M2.7 adaptive（无 effort）'],
+    ['MiniMax-M2.7-highspeed', { thinking: { type: 'adaptive' }, output_config: { effort: 'max' } }, 'M2.7-highspeed adaptive + effort=max'],
+    ['MiniMax-M2.7', { thinking: { type: 'disabled' }, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: TINY_PNG } }, { type: 'text', text: '这张图是什么颜色？一个字回答' }] }] }, 'M2.7 图片输入'],
+    ['MiniMax-M2.7-highspeed', { thinking: { type: 'disabled' }, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: TINY_PNG } }, { type: 'text', text: '这张图是什么颜色？一个字回答' }] }] }, 'M2.7-highspeed 图片输入'],
+  ]
+  let failed = 0
+  for (const [model, patch, label] of cases) {
+    const text = await call({ model, max_tokens: 1200, ...patch, messages: prompts }, label)
+    if (text === undefined) {
+      failed += 1
+      continue
+    }
+    const thinking = text.includes('"type":"thinking"')
+    if (!AS_JSON) console.log(`   ${thinking ? '含思考块' : '无思考块'} · ${model}`)
+  }
+  return failed === 0 ? 0 : 1
 }
 
 function finish(code) {

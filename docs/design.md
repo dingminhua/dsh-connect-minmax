@@ -13,7 +13,9 @@
 | 鉴权头 | `Authorization: Bearer <accessToken>` + `anthropic-version: 2023-06-01`。`x-api-key` 不是必需（`x-api-key` 只放 token 反而 401 `token is required`） |
 | 模型 | `MiniMax-M3`、`MiniMax-M3.1-Flash`、`MiniMax-M2.7`、`MiniMax-M2.7-highspeed`、`MiniMax-M3.1-Flash-Preview` 均 200 |
 | thinking | 接受 `{"type":"adaptive"}`、`{"type":"enabled","budget_tokens":N}`、`{"type":"disabled"}`；`output_config.effort` 亦可。**`MiniMax-M3.1-Flash` 必须 adaptive：发 `disabled` → 400 `requires adaptive thinking`** |
-| 图片 | base64 `image` block 可用（M3 系列） |
+| 图片 | base64 `image` block 可用（M3 / M3.1-Flash / M2.7 / M2.7-highspeed 实测均 200） |
+| effort 取值 | `output_config.effort` 只接受 `low` / `medium` / `high` / `xhigh` / `max`；`on` / `off` → 400 `invalid reasoning_effort`（MiniMax Code 的 M3 开关拼的就是 `on`/`off`，那套在当前网关不成立） |
+| 文档结构 | 模型名/顺序/上下文档位/思考形态以 `~/.minimax/config.yaml`（远端快照）与随包 `@mavis/config/src/minimax-model-catalog.ts` 为准；`M3`/`M3.1-Flash` 有 512K 与 1M 两档（1M 标 `higher_usage`） |
 | 工具 | `tool_use` / `tool_result` 多轮回放均可用 |
 | usage | Anthropic 字段名：`input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`，另有 `output_tokens_details.thinking_tokens` |
 | 401 语义 | `{"error":"invalid access token"}`；token 可能被服务端提前撤销（实测有效期短于 `expiresAtMs`） |
@@ -51,7 +53,8 @@ token 缓存策略：内存缓存 + `expiresAtMs - 60s` 提前失效；401 时 `
   1. 请求前预检凭据 → 失败抛 `LlmError('…','MISSING_CREDENTIAL')`；
   2. 401 → 失效缓存、重取 token、重试一次（用同一请求体）；
   3. 终态错误 → Harness failure code（`AUTH`/`RATE_LIMIT`/`QUOTA`/`CONTEXT_WINDOW_EXCEEDED`/`TIMEOUT`/`SERVER`）。
-- 模型能力：`reasoning: true` + `thinkingLevelMap`；`MiniMax-M3.1-Flash` 的
+- 模型能力：`reasoning: true` + `thinkingLevelMap`，`minimal` 一律 `null`（上游无此档），
+  `M3.1-Flash` / `M2.7-highspeed` 的 `off` 为 `null`（关不掉）；`MiniMax-M3.1-Flash` 的
   `off` 映射为 `null`（不提供"关闭思考"档，避免 400）。
 - base URL、模型表与 pi-ai `Model` 描述**同源**（`catalog.ts` 一处定义）。
 

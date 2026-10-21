@@ -62,6 +62,9 @@ export const en = {
   'models.reasoning': 'Thinking',
   'models.reasoningYes': 'Yes',
   'models.reasoningNo': 'No',
+  'models.thinkingSwitchable': 'Switchable',
+  'models.thinkingForced': 'Always on',
+  'models.longContext': '1M available',
 
   'error.recent': 'Last error',
 } as const
@@ -120,6 +123,9 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'models.reasoning': '思考',
   'models.reasoningYes': '支持',
   'models.reasoningNo': '不支持',
+  'models.thinkingSwitchable': '可关闭',
+  'models.thinkingForced': '强制开启',
+  'models.longContext': '可选 1M',
 
   'error.recent': '最近错误',
 }
