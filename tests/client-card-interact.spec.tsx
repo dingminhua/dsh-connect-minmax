@@ -455,13 +455,13 @@ describe('设备码登录与自续期（池空时的出路）', () => {
     expect(call?.body).toEqual({ id: 'sess-1' })
   })
 
-  it('池里有副本时不画「添加账号」区（池非空不是绝境）', async () => {
+  it('池里有副本时**仍然**画「添加账号」（多账号的入口不能加了一个就消失）', async () => {
     const payload = statusPayload({
       routes: [liveRoute({ pool: { active: 'cn-c1', accounts: [{ id: 'cn-c1', label: '副本 1', live: false, drained: false, rank: 1, participates: true }] } })],
     })
     mockRoutes({ status: () => payload })
     await mount(recordingScope(() => payload))
-    expect(Array.from(container.querySelectorAll('button')).some(b => b.textContent === 'device.add')).toBe(false)
+    expect(Array.from(container.querySelectorAll('button')).some(b => b.textContent === 'device.add')).toBe(true)
   })
 
   it('续期 fatal → 把死因画出来（用户要能看到为什么停了）', async () => {

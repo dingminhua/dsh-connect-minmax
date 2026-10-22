@@ -1097,17 +1097,16 @@ function AccountPanel(props: {
         />
       )}
 
-      {/* 池空（还没有任何副本）时给一条出路：设备码登录自己拿一个账号。 */}
-      {(pool === undefined || pool.accounts.length === 0) && (
-        <DeviceLoginSection
-          sessions={live?.deviceSessions ?? []}
-          nowMs={nowMs}
-          busy={busy}
-          t={t}
-          onStart={onStartDevice}
-          onCancel={onCancelDevice}
-        />
-      )}
+      {/* 设备码登录**始终可见**：池空时它是唯一出路；池非空时它是"再加一个号"
+          的入口——只在池空才画的话，加了第一个号按钮就消失，多账号成了一句空话。 */}
+      <DeviceLoginSection
+        sessions={live?.deviceSessions ?? []}
+        nowMs={nowMs}
+        busy={busy}
+        t={t}
+        onStart={onStartDevice}
+        onCancel={onCancelDevice}
+      />
 
       {/* 活凭据自续期状态：用户要确认的就是"关掉 MiniMax Code 它还能不能活"。 */}
       {live?.renewal !== undefined && <RenewalRow renewal={live.renewal} t={t} />}
