@@ -442,6 +442,7 @@ function statusOf(options: {
     id,
     name: id,
     contextWindow: 512_000,
+    contextWindowOptions: [512_000, 1_000_000],
     maxTokens: 128_000,
     input: ['text'],
     reasoning: true,

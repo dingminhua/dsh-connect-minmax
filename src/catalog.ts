@@ -279,6 +279,37 @@ export function withContextWindow(spec: MiniMaxModelSpec, longContext: boolean):
   return { ...spec, contextWindow: MINIMAX_LONG_CONTEXT_WINDOW }
 }
 
+/**
+ * 按"每模型上下文档位"覆盖目录项。
+ *
+ * MiniMax Code 把 1M 做成**每模型可选档**（`contextWindowOptions` + `higher_usage`
+ * 计费提示），而 DSH 每个模型只有一个 `contextWindow`，所以档位必须在插件侧选定。
+ *
+ * 只接受该模型**确实提供**的档位：写一个目录里没有的数字（比如给 M2.7 写 1M）会被
+ * 忽略并回落到 `fallback` 的结果，而不是把窗口报成一个上游根本不受理的值——
+ * 那会让宿主按错误的窗口做上下文压缩，直到请求被拒才发现。
+ *
+ * @param spec - 目录项。
+ * @param requested - 用户为该模型选的窗口；`undefined` 表示没选。
+ * @param fallback - 没选时用的结果（通常是 `withContextWindow` 的全局档）。
+ * @returns 调整后的目录项。
+ */
+export function withModelContextWindow(
+  spec: MiniMaxModelSpec,
+  requested: number | undefined,
+  fallback: MiniMaxModelSpec,
+): MiniMaxModelSpec {
+  if (requested === undefined) return fallback
+  const options = spec.contextWindowOptions ?? [spec.contextWindow]
+  if (!options.includes(requested)) return fallback
+  return { ...fallback, contextWindow: requested }
+}
+
+/** 某个模型可选的上下文档位（卡片用它渲染下拉框）。 */
+export function contextWindowOptionsOf(spec: MiniMaxModelSpec): readonly number[] {
+  return spec.contextWindowOptions ?? [spec.contextWindow]
+}
+
 /** 按 id 取目录项；未知名返回 `undefined`（不做模糊匹配）。 */
 export function findModelSpec(id: string): MiniMaxModelSpec | undefined {
   const wanted = id.trim()

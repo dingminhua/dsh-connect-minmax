@@ -69,6 +69,8 @@ export interface MiniMaxStatusModel {
   /** 卡片角标，例如「订阅限免」。 */
   badge?: string
   contextWindow: number
+  /** 该模型可选的上下文档位（含当前值）。 */
+  contextWindowOptions?: number[]
   maxTokens: number
   input: string[]
   reasoning: boolean
@@ -181,6 +183,8 @@ export interface MiniMaxStatusModelSpec {
   name: string
   badge?: string
   contextWindow: number
+  /** 上游为该模型提供的档位；卡片据此渲染下拉框，而不是猜一个列表。 */
+  contextWindowOptions?: readonly number[]
   maxTokens: number
   input: readonly string[]
   reasoning: boolean
@@ -271,6 +275,9 @@ export function toStatusModels(models: readonly MiniMaxStatusModelSpec[]): MiniM
     name: model.name,
     ...model.badge === undefined ? {} : { badge: model.badge },
     contextWindow: model.contextWindow,
+    ...model.contextWindowOptions === undefined
+      ? {}
+      : { contextWindowOptions: [...model.contextWindowOptions] },
     maxTokens: model.maxTokens,
     thinkingMode: model.thinkingMode,
     input: [...model.input],

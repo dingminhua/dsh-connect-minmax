@@ -37,7 +37,7 @@ export interface MiniMaxSettingsScope {
 }
 
 /** 卡片可写的字段名。 */
-export type MiniMaxWritableField = 'models' | 'regions' | 'longContext'
+export type MiniMaxWritableField = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelContextWindows'
 
 /** 写入没落地的错误。 */
 export class MiniMaxSettingsWriteError extends Error {
@@ -112,6 +112,32 @@ export function writeModels(scope: MiniMaxSettingsScope, models: readonly string
 /** 写入启用的区域列表。至少留一个：空列表会让插件一条路由都不注册。 */
 export function writeRegions(scope: MiniMaxSettingsScope, regions: readonly string[]): Promise<void> {
   return writeField(scope, 'regions', [...regions], sameList)
+}
+
+/**
+ * 写入某个模型的上下文档位。
+ *
+ * 只接受该模型确实提供的档位（由调用方从 `contextWindowOptions` 里选），
+ * 写一个上游不受理的值会让宿主按错误的窗口做上下文压缩。
+ */
+export function writeModelContextWindow(
+  scope: MiniMaxSettingsScope,
+  modelId: string,
+  window: number,
+): Promise<void> {
+  const current = readField(scope, 'modelContextWindows')
+  const base = (typeof current === 'object' && current !== null && !Array.isArray(current))
+    ? { ...(current as Record<string, number>) }
+    : {}
+  base[modelId] = window
+  return writeField(scope, 'modelContextWindows', base, (expected, actual) => {
+    if (typeof actual !== 'object' || actual === null || Array.isArray(actual)) return false
+    const readBack = actual as Record<string, unknown>
+    const wanted = expected as Record<string, unknown>
+    const keys = Object.keys(wanted)
+    return keys.length === Object.keys(readBack).length
+      && keys.every(key => readBack[key] === wanted[key])
+  })
 }
 
 /** 写入长上下文档开关。 */

@@ -88,6 +88,13 @@ export interface MiniMaxModelView {
   /** 角标（如「订阅限免」）；缺省不显示。 */
   badge?: string
   contextWindow: number
+  /**
+   * 上游为该模型提供的上下文档位（含当前值）。
+   *
+   * 空数组 = 旧版本应答没有这个字段，卡片此时**只读显示**当前窗口，不猜一个
+   * 档位列表出来——给用户一个改了不生效的下拉框比没有下拉框更糟。
+   */
+  contextWindowOptions: number[]
   maxTokens: number
   input: string[]
   reasoning: boolean
@@ -263,6 +270,9 @@ function parseModels(value: unknown): MiniMaxModelView[] {
       name: stringOf(row['name']) ?? id,
       ...badge === undefined ? {} : { badge },
       contextWindow: finiteNumberOf(row['contextWindow']) ?? 0,
+      contextWindowOptions: Array.isArray(row['contextWindowOptions'])
+        ? row['contextWindowOptions'].filter((item): item is number => typeof item === 'number')
+        : [],
       maxTokens: finiteNumberOf(row['maxTokens']) ?? 0,
       input: Array.isArray(row['input'])
         ? row['input'].filter((item): item is string => typeof item === 'string')

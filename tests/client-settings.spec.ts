@@ -12,6 +12,7 @@ import {
   readField,
   toggleRegion,
   writeLongContext,
+  writeModelContextWindow,
   writeModels,
   writeRegions,
 } from '../src/client/settings.ts'
@@ -129,5 +130,27 @@ describe('toggleRegion', () => {
     // 而重注册一遍 provider（会话里正在跑的模型选择跟着抖）。
     expect(toggleRegion(['global', 'cn'], 'global').next).toEqual(toggleRegion(['cn', 'global'], 'global').next)
     expect(toggleRegion(['global'], 'cn').next).toEqual(['cn', 'global'])
+  })
+})
+
+describe('writeModelContextWindow', () => {
+  it('合并进既有映射，不覆盖别的模型的档位', async () => {
+    const scope = scopeOf({ modelContextWindows: { 'MiniMax-M3': 1_000_000 } })
+    await writeModelContextWindow(scope, 'MiniMax-M3.1-Flash', 512_000)
+    expect(scope.value['modelContextWindows']).toEqual({
+      'MiniMax-M3': 1_000_000,
+      'MiniMax-M3.1-Flash': 512_000,
+    })
+  })
+
+  it('字段原本不存在时新建', async () => {
+    const scope = scopeOf({})
+    await writeModelContextWindow(scope, 'MiniMax-M3', 1_000_000)
+    expect(scope.value['modelContextWindows']).toEqual({ 'MiniMax-M3': 1_000_000 })
+  })
+
+  it('回读比对是逐键的：值没落地就报错', async () => {
+    const scope = scopeOf({ modelContextWindows: {} }, { persists: false })
+    await expect(writeModelContextWindow(scope, 'MiniMax-M3', 1_000_000)).rejects.toThrow(/回读/)
   })
 })

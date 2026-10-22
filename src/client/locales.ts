@@ -131,6 +131,8 @@ export const en = {
   /* ---- 模型页 ---- */
   'models.enabledCount': '{count} of {total} enabled',
   'models.selectAll': 'Enable all',
+  'models.tierHint': 'Pick this model\'s context tier; the 1M tier is billed at a higher rate upstream',
+  'models.higherUsage': '(higher usage)',
   'models.selectAllHint': 'Writes an empty list, which means "every model in the catalog" — models added upstream later stay visible.',
   'models.lastEnabled': 'Keep at least one model enabled.',
   'models.test': 'Test',
@@ -281,6 +283,8 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   /* ---- 模型页 ---- */
   'models.enabledCount': '已启用 {count} / {total}',
   'models.selectAll': '全部启用',
+  'models.tierHint': '选这个模型的上下文档位；1M 档上游按更高用量计费',
+  'models.higherUsage': '（更高用量）',
   'models.selectAllHint': '写入空列表，宿主语义是"目录全部"——以后上游新增的模型仍会自动出现。',
   'models.lastEnabled': '至少要保留一个启用的模型。',
   'models.test': '测试',

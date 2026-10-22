@@ -8,7 +8,7 @@
 import type { Model } from '@earendil-works/pi-ai'
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, findModelSpec, modelIds, regionBaseUrl, toPiModel, withContextWindow, type MiniMaxModelSpec } from '../src/catalog.ts'
+import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, contextWindowOptionsOf, findModelSpec, modelIds, regionBaseUrl, toPiModel, withContextWindow, withModelContextWindow, type MiniMaxModelSpec } from '../src/catalog.ts'
 
 const byId = (id: string): MiniMaxModelSpec => {
   const spec = findModelSpec(id)
@@ -203,5 +203,36 @@ describe('toPiModel', () => {
     expect(model.id).toBe('MiniMax-M3.1-Flash-Preview')
     expect(model.baseUrl).toBe(DEFAULT_BASE_URL_GLOBAL)
     expect(model.thinkingLevelMap).toEqual({ ...MINIMAX_EFFORT_LEVELS, off: null })
+  })
+})
+
+describe('withModelContextWindow / contextWindowOptionsOf', () => {
+  it('接受该模型确实提供的档位', () => {
+    const spec = byId('MiniMax-M3')
+    const result = withModelContextWindow(spec, 1_000_000, spec)
+    expect(result.contextWindow).toBe(1_000_000)
+  })
+
+  it('上游没提供的档位不改写窗口（否则宿主会按错误的窗口做压缩）', () => {
+    const spec = byId('MiniMax-M2.7')
+    // M2.7 只有 204800 一档。
+    expect(contextWindowOptionsOf(spec)).toEqual([204_800])
+    const fallback = { ...spec, contextWindow: 999 }
+    expect(withModelContextWindow(spec, 1_000_000, fallback).contextWindow).toBe(999)
+  })
+
+  it('没声明 contextWindowOptions 的模型只认自己那一档', () => {
+    const bare: MiniMaxModelSpec = {
+      id: 'X',
+      name: 'X',
+      contextWindow: 1234,
+      maxTokens: 56,
+      input: ['text'],
+      reasoning: false,
+      thinkingMode: 'switchable',
+      thinkingLevelMap: { ...MINIMAX_EFFORT_LEVELS, off: 'disabled' },
+    }
+    expect(contextWindowOptionsOf(bare)).toEqual([1234])
+    expect(withModelContextWindow(bare, 1234, bare).contextWindow).toBe(1234)
   })
 })

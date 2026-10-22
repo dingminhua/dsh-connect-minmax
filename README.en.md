@@ -48,7 +48,8 @@ Thinking levels map to MiniMax's native `thinking: {type:'adaptive'}` + `output_
 only sends the accepted values.
 
 Known gaps: the host only has text/image modalities, so **video input cannot be expressed**; and the
-1M context tier is exposed as the `longContext` plugin option instead of a per-model menu entry.
+1M context tier is exposed as the `longContext` plugin option, and can be overridden per model with
+`modelContextWindows` (the card renders a tier dropdown for any model that actually offers more than one).
 
 ## Settings card
 
@@ -68,7 +69,7 @@ The card on the plugin page follows the same shape as its siblings (qoder / work
   source, when credits were read, catalog and enabled model counts, account pool, last error. This page
   has no control that changes settings.
 
-The card can write back the `models` / `regions` / `longContext` config fields and **verifies each write
+The card can write back the `models` / `regions` / `longContext` / `modelContextWindows` config fields and **verifies each write
 by reading it back**: the settings surface may report success without the value landing, and without that
 check the card would tick a checkbox while the config stayed unchanged. When the host exposes no settings
 surface, the whole card degrades to read-only and says so.
@@ -119,6 +120,7 @@ sign-in and does not impersonate the official client.
 | `baseUrl` | empty | override the **domestic (CN)** hosted base URL (no trailing `/v1`; the SDK appends `/v1/messages`) |
 | `globalBaseUrl` | empty | override the **international (Global)** hosted base URL (same rule) |
 | `longContext` | `false` | use the 1M context tier (`M3` / `M3.1-Flash`); upstream bills it as higher usage |
+| `modelContextWindows` | `{}` | **per-model** context tier (id → window), overriding `longContext`. Only tiers the model actually offers are accepted; anything else is ignored with a warning — a window upstream does not honour would make the harness compress context against the wrong number |
 
 ## Diagnostics
 

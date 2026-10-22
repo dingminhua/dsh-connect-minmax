@@ -30,10 +30,12 @@ import { INERT_AUTH, MiniMaxAdapter, PROVIDER_DISPLAY_NAME, createMiniMaxProvide
 import { MiniMaxAuth } from './auth.ts'
 import {
   MINIMAX_MODELS,
+  contextWindowOptionsOf,
   displayNameForRegion,
   regionBaseUrl,
   routeForRegion,
   withContextWindow,
+  withModelContextWindow,
 } from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
@@ -104,6 +106,7 @@ export interface MiniMaxConfig {
    * 默认关：1M 档在上游按更高用量计费。
    */
   longContext?: boolean
+  modelContextWindows?: Record<string, number>
 }
 
 /** 配置 schema：值经过 schemastery 校验/补默认后才进 `apply()`。 */
@@ -131,6 +134,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .boolean()
     .default(false)
     .description('用 1M 长上下文（M3 / M3.1-Flash）；上游按更高用量计费，默认关。'),
+  modelContextWindows: z
+    .dict(z.number().step(1).min(1))
+    .default({})
+    .description('逐模型上下文档位（id → 窗口）；只接受该模型确实提供的档位，其余忽略。'),
 }) as unknown as z<MiniMaxConfig>
 
 /**
@@ -172,6 +179,32 @@ export function selectModels(
 }
 
 /**
+ * 把一个目录项投影成"用户设置下真正生效"的那一份。
+ *
+ * 两层：先按全局 `longContext` 决定默认档，再按 `modelContextWindows` 覆盖单个模型。
+ * 覆盖只接受该模型**确实提供**的档位——给 M2.7 写 1M 会被忽略并 warn，而不是把窗口
+ * 报成一个上游根本不受理的值（那会让宿主按错误的窗口做上下文压缩，直到请求被拒才发现）。
+ */
+export function projectModel(
+  spec: MiniMaxModelSpec,
+  longContext: boolean,
+  overrides: Record<string, number | undefined> | undefined,
+  warn: (message: string) => void,
+): MiniMaxModelSpec {
+  const base = withContextWindow(spec, longContext)
+  const requested = overrides?.[spec.id]
+  if (requested === undefined) return base
+  const options = contextWindowOptionsOf(spec)
+  if (!options.includes(requested)) {
+    warn(
+      `模型 "${spec.id}" 的上下文被设成 ${requested}，但它只提供 ${options.join(' / ')}，已忽略。`,
+    )
+    return base
+  }
+  return withModelContextWindow(spec, requested, base)
+}
+
+/**
  * 解析实际使用的 base URL。
  *
  * 空配置回落到区域默认值；非空配置去掉结尾的斜杠（`@anthropic-ai/sdk`
@@ -199,7 +232,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   const requestedRegions = normalizeRegions(config.regions, warn)
   const longContext = config.longContext ?? false
-  const models = selectModels(config.models, warn).map(spec => withContextWindow(spec, longContext))
+  const models = selectModels(config.models, warn).map(spec => projectModel(spec, longContext, config.modelContextWindows, warn))
 
   /** 每个区域一条路由；装配方式完全相同，只有凭据面与 baseUrl 不同。 */
   const registeredRoutes: MiniMaxStatusRouteDeps[] = []
@@ -479,7 +512,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       models,
       // 全目录同样过一遍长上下文档位：卡片要展示的"上下文窗口"必须是用户
       // 当前设置下的真实值，否则勾了 longContext 卡片还显示 512K。
-      catalog: MINIMAX_MODELS.map(spec => withContextWindow(spec, longContext)),
+      catalog: MINIMAX_MODELS.map(spec => projectModel(spec, longContext, config.modelContextWindows, warn)),
       enabledRegions: requestedRegions,
       longContext,
       version: PLUGIN_VERSION,

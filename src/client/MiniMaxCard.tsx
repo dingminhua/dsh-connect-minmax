@@ -60,7 +60,13 @@ import type {
 } from '../status-paths.ts'
 import { MINIMAX_CARD_CSS } from './styles.ts'
 import type { MiniMaxSettingsScope } from './settings.ts'
-import { toggleRegion, writeLongContext, writeModels, writeRegions } from './settings.ts'
+import {
+  toggleRegion,
+  writeLongContext,
+  writeModelContextWindow,
+  writeModels,
+  writeRegions,
+} from './settings.ts'
 
 /** 轮询间隔（毫秒）。 */
 export const MINIMAX_POLL_INTERVAL_MS = 10_000
@@ -782,6 +788,7 @@ function ModelPanel(props: {
   canWrite: boolean
   probes: Record<string, ModelProbe>
   onToggleModel(modelId: string, enabled: boolean): void
+  onModelContext(modelId: string, window: number): void
   onSelectAll(): void
   onTest(modelId: string): void
   onLongContext(enabled: boolean): void
@@ -789,7 +796,9 @@ function ModelPanel(props: {
   message: string | undefined
   t: MiniMaxTranslate
 }): ReactElement {
-  const { status, region, canWrite, probes, onToggleModel, onSelectAll, onTest, onLongContext, busy, message, t } = props
+  const {
+    status, region, canWrite, probes, onToggleModel, onModelContext, onSelectAll, onTest, onLongContext, busy, message, t,
+  } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
   const routes = routesForRegion(effectiveRoutesOf(status), region)
@@ -843,6 +852,7 @@ function ModelPanel(props: {
           probe={probes[`${region}:${model.id}`]}
           route={testRoute?.route}
           onToggle={onToggleModel}
+          onModelContext={onModelContext}
           onTest={onTest}
           t={t}
         />
@@ -863,10 +873,11 @@ function ModelRow(props: {
   probe: ModelProbe | undefined
   route: string | undefined
   onToggle(modelId: string, enabled: boolean): void
+  onModelContext(modelId: string, window: number): void
   onTest(modelId: string): void
   t: MiniMaxTranslate
 }): ReactElement {
-  const { model, enabled, canWrite, busy, probe, route, onToggle, onTest, t } = props
+  const { model, enabled, canWrite, busy, probe, route, onToggle, onModelContext, onTest, t } = props
   const supportsImage = model.input.includes('image')
   return (
     <div className={`dsm-minimax-row${enabled ? '' : ' dsm-minimax-row-off'}`}>
@@ -889,6 +900,24 @@ function ModelRow(props: {
         <div className="dsm-minimax-model-facts">
           <span>{t('models.context')} {formatContextWindow(model.contextWindow)}</span>
           <span>{t('models.output')} {formatContextWindow(model.maxTokens)}</span>
+          {model.contextWindowOptions.length > 1 && (
+            <label className="dsm-minimax-inline-check" title={canWrite ? t('models.tierHint') : t('settings.readOnly')}>
+              <select
+                value={model.contextWindow}
+                disabled={!canWrite || busy}
+                onChange={event => {
+                  onModelContext(model.id, Number((event.target as HTMLSelectElement).value))
+                }}
+              >
+                {model.contextWindowOptions.map(option => (
+                  <option key={option} value={option}>
+                    {formatContextWindow(option)}
+                    {option >= 1_000_000 ? ` ${t('models.higherUsage')}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <span className={`dsm-minimax-chip${supportsImage ? ' dsm-minimax-chip-on' : ''}`}>
             {supportsImage ? t('models.imageYes') : t('models.imageNo')}
           </span>
@@ -1082,6 +1111,17 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [settingsScope, status, afterWrite, translate])
 
+  const handleModelContext = useCallback(async (modelId: string, window: number): Promise<void> => {
+    if (settingsScope === undefined) return
+    try {
+      await writeModelContextWindow(settingsScope, modelId, window)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, afterWrite])
+
   const handleSelectAll = useCallback(async (): Promise<void> => {
     if (settingsScope === undefined || status === undefined) return
     // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
@@ -1202,6 +1242,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   canWrite={canWrite}
                   probes={probes}
                   onToggleModel={(id, enabled) => { void handleToggleModel(id, enabled) }}
+                  onModelContext={(id, window) => { void handleModelContext(id, window) }}
                   onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
                   onLongContext={enabled => { void handleLongContext(enabled) }}

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import { MiniMaxAdapter, PROVIDER_DISPLAY_NAME } from '../src/adapter.ts'
-import { MINIMAX_MODELS, ROUTE, regionBaseUrl } from '../src/catalog.ts'
-import { Config, apply, effectiveBaseUrl, normalizeRegions, selectModels } from '../src/index.ts'
+import { MINIMAX_MODELS, ROUTE, findModelSpec, regionBaseUrl } from '../src/catalog.ts'
+import { apply, Config, effectiveBaseUrl, normalizeRegions, projectModel, selectModels } from '../src/index.ts'
 import { PLUGIN_VERSION } from '../src/version.ts'
 
 /**
@@ -259,5 +259,51 @@ describe('apply', () => {
     apply(result.ctx, {})
     const llm = (result.ctx as unknown as { llm: Record<string, unknown> }).llm
     expect(llm.registerConfigurableProviders).toBeUndefined()
+  })
+})
+
+describe('projectModel（逐模型上下文档位）', () => {
+  const specOf = (id: string) => {
+    const spec = findModelSpec(id)
+    if (spec === undefined) throw new Error(`缺少模型 ${id}`)
+    return spec
+  }
+
+  it('没有覆盖时等于全局档：longContext=true 让 M3 用 1M', () => {
+    const warned: string[] = []
+    const result = projectModel(specOf('MiniMax-M3'), true, {}, message => warned.push(message))
+    expect(result.contextWindow).toBe(1_000_000)
+    expect(warned).toEqual([])
+  })
+
+  it('覆盖能把单个模型拉回标准档，即使全局开了 1M', () => {
+    // 这是这个字段存在的理由：1M 按更高用量计费，用户可能只想给其中一个模型开。
+    const result = projectModel(
+      specOf('MiniMax-M3'),
+      true,
+      { 'MiniMax-M3': 512_000 },
+      () => undefined,
+    )
+    expect(result.contextWindow).toBe(512_000)
+  })
+
+  it('给不支持 1M 的模型写 1M 被忽略并 warn（不能把窗口报成上游不受理的值）', () => {
+    const warned: string[] = []
+    const result = projectModel(
+      specOf('MiniMax-M2.7'),
+      false,
+      { 'MiniMax-M2.7': 1_000_000 },
+      message => warned.push(message),
+    )
+    expect(result.contextWindow).toBe(204_800)
+    expect(warned.join(' ')).toContain('MiniMax-M2.7')
+    expect(warned.join(' ')).toContain('204800')
+  })
+
+  it('只影响被点名的模型，其余原样', () => {
+    const warned: string[] = []
+    const m3 = projectModel(specOf('MiniMax-M3'), false, { 'MiniMax-M3.1-Flash': 1_000_000 }, m => warned.push(m))
+    expect(m3.contextWindow).toBe(512_000)
+    expect(warned).toEqual([])
   })
 })
