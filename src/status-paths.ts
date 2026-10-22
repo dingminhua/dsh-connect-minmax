@@ -541,3 +541,19 @@ export function formatContextWindow(contextWindow: number): string {
 function trimZeros(text: string): string {
   return text.includes('.') ? text.replace(/\.?0+$/, '') : text
 }
+
+/** 本插件的设置命名空间（宿主抛给卡片的那一份）。 */
+export const MINIMAX_SETTINGS_NS = 'minimax' as const
+
+/**
+ * 浏览器半边会去匹配的命名空间拼法，**按优先级排序**。
+ *
+ * `describe()` 按 Loader 条目 id 给 form 打键，而条目 id 由 profile patch 决定
+ * ——所以只能问宿主，不能假设。实测到的三种拼法是：裸包名、
+ * 桌面上用的 `include:` 前缀形式、以及声明的短名。
+ */
+export const MINIMAX_SETTINGS_NAMESPACE_CANDIDATES: readonly string[] = [
+  'dsh-connect-minmax',
+  'include:dsh-connect-minmax',
+  MINIMAX_SETTINGS_NS,
+]

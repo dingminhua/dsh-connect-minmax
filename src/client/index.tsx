@@ -27,7 +27,11 @@ import type { MiniMaxSettingsScope } from './settings.ts'
 import type { MiniMaxCardInjected } from './MiniMaxCard.tsx'
 import { en, zh } from './locales.ts'
 import type { MiniMaxSettingsKey } from './locales.ts'
-import { MINIMAX_CARD_KEYS } from '../status-paths.ts'
+import {
+  MINIMAX_CARD_KEYS,
+  MINIMAX_SETTINGS_NAMESPACE_CANDIDATES,
+  MINIMAX_SETTINGS_NS,
+} from '../status-paths.ts'
 
 /** 浏览器插件上下文。`slots` 与 `locale` 由上面的类型增强声明。 */
 export type MiniMaxClientContext = ClientContext & {
@@ -61,39 +65,46 @@ export function apply(ctx: MiniMaxClientContext): void {
     const t = ctx.locale.bind(namespace) as MiniMaxCardInjected['t']
 
     /**
-     * 设置写入面（惰性解析）。
+     * 设置写入面 + 槽位重绑。
      *
-     * `configForms` **不进 `inject`**：Cordis 的依赖门禁是硬的，写进去就会
-     * 让"宿主不提供该服务"变成"整个客户端插件一次都不跑"。拿不到时
-     * `settingsScope` 是 undefined，卡片自动退化成只读——保存是唯一需要它的功能。
+     * 这里照 workbuddy 的实测做法（它的 4.3.0 缺陷 issue #46 踩过同一个坑），
+     * 因为**两个问题必须同时解决**，只解一个等于没解：
      *
-     * 之前是"apply 时解析一次就定下来"，那是模型勾选存不进去的真因：卡片挂载
-     * 那一刻 `configForms` 的 describe 镜像通常还是 `idle`（`view` 为空），于是
-     * 退化成猜的命名空间 `dsh-connect-minmax`；宿主的真实 entry id 不是它，
-     * `get()` 拿到的是一个不存在的条目，`set()` 自然永远是 false——界面看起来
-     * 能点，实际一条都没写进去。
+     *  1. **镜像晚就绪**。`configForms` 的 describe 由异步 `remote.settings.
+     *     describe()` 填充，`apply` 时 `view` 通常还不存在。此时按声明的名字
+     *     去 `get()`，`ConfigFormController.derive()` 是**精确匹配**命名空间的，
+     *     猜错的名字会让那个 form 永远 unavailable —— `set()` 恒为 false，
+     *     界面能点、一条也存不进去。
+     *  2. **注入结果被按对象身份缓存**。渲染器（`dsh-client-ui-renderer` 的
+     *     `rootInjectCache`）对每个条目只跑一次 `inject()`；条目早于镜像出现
+     *     注册的话，后面即使 scope 绑好了也不会重新求值。所以晚绑定**必须**
+     *     销毁旧注册、重新注册，光换内部变量没用。
      *
-     * 现在每次用的时候现解析，并订阅 describe 镜像：命名空间晚出现也能拿到。
-     * 认哪个命名空间**看 schema 里的字段**而不是猜名字最稳妥——我们的配置里
-     * `modelContextWindows` / `reasoningEffort` 是独有的，部署方把安装行改叫
-     * 什么都不会认错。
+     * `whileServed(candidates, register)` 是宿主自己的做法：它在 unserved→served
+     * 的**边沿**触发，把"宿主实际在服务的命名空间集合"交给我们，而不是让我们
+     * 拿一个启动时抓的快照去猜。
      */
-    const settingsScope = createLazySettingsScope(ctx)
+    const liveDisposers: Array<() => void> = []
     /**
-     * 注册一张卡片。
+     * 设置写入面。
+     *
+     * 用**惰性对象**而不是"绑一次就固定的 form"：它每次读/写都现查当前服务的
+     * 命名空间，所以晚就绪、或宿主换了条目名都能自己救回来，不会因为启动时
+     * 猜错一次就永久失效。
+     */
+    const settingsScope: MiniMaxSettingsScope | undefined = createLazySettingsScope(ctx)
+
+    /**
+     * 注册一张卡片；失败返回 `undefined`。
      *
      * `ctx.slots.inject(seat, factory)` 是**声明式**的：槽位还没被声明时先
-     * 排队，等声明了再执行 factory。所以页面没挂载时注册**不会丢**。
-     *
-     * `ctx.slots.register(...)` 返回 disposer；keyed 槽位里同一个 key 重复
-     * 注册会抛（`already has an entry for key …`），所以这里每个 key 只注册
-     * 一次。
+     * 排队，等声明了再执行 factory，所以页面没挂载时注册不会丢。
      */
-    const registerCard = (slotName: string, key: string): void => {
+    const registerCard = (slotName: string, key: string): (() => void) | undefined => {
       try {
-        ctx.slots.inject(slotName as never, () => (ctx.slots as unknown as {
+        return ctx.slots.inject(slotName as never, () => (ctx.slots as unknown as {
           register(
-            options: { name: string; key: string; priority: number; inject: () => MiniMaxCardInjected },
+            options: { name: string, key: string, priority: number, inject: () => MiniMaxCardInjected },
             component: unknown,
           ): () => void
         }).register({
@@ -103,32 +114,102 @@ export function apply(ctx: MiniMaxClientContext): void {
           inject: () => settingsScope === undefined ? { t } : { t, settingsScope },
         }, MiniMaxCard))
       } catch (error: unknown) {
-        // 每个槽位单独隔离：一个槽位注册失败不许把其他槽位一起带下去。
+        // 每个槽位单独隔离：一个失败不许把其他槽位一起带下去。
         console.error(
-          `[dsh-connect-minmax] card slot "${slotName}" failed to register (host provider unaffected):`,
+          `[dsh-connect-minmax] card slot "${slotName}/${key}" failed to register (host provider unaffected):`,
           error,
         )
+        return undefined
       }
     }
 
-    /**
-     * 插件页按**包标识**给配置槽位打 key，不是按本插件的设置命名空间：
-     *  - `plugins.bundle.config` 用**裸包名**；
-     *  - `plugins.row.config` 用 **`<包名>#<行 id>`**。
-     *
-     * 插件页是按**精确相等**在 `Set` 里查 key 的，而部署方可以把安装行命名
-     * 成任何样子（宿主实测用的是 `include:dsh-connect-minmax` 这种带前缀的
-     * id）。只注册一种拼法而部署用的是另一种时，卡片**渲染不出任何东西、
-     * 也不报任何错**——插件照常显示为 running、有描述有行，只是没有配置体。
-     *
-     * 所以每种拼法都注册一遍：keyed 槽位里各 key 彼此独立，不存在冲突。
-     */
-    for (const key of MINIMAX_CARD_KEYS) {
-      registerCard('plugins.bundle.config', key)
-      registerCard('plugins.row.config', `${key}#${key}`)
+    /** 注册全部槽位；返回可用来撤销的 disposer 列表。 */
+    const registerAllSlots = (): Array<() => void> => {
+      const disposers: Array<() => void> = []
+      for (const key of MINIMAX_CARD_KEYS) {
+        for (const [slotName, slotKey] of [
+          ['plugins.bundle.config', key],
+          ['plugins.row.config', `${key}#${key}`],
+        ] as const) {
+          const dispose = registerCard(slotName, slotKey)
+          if (dispose !== undefined) disposers.push(dispose)
+        }
+      }
+      return disposers
     }
+
+    /**
+     * 换一批注册。
+     *
+     * 顺序是有意的：**先撤销再注册**。keyed 槽位同一个 key 重复注册会抛
+     * `already has an entry for key …`，所以不能先注册后撤。
+     */
+    const rebindSlots = (): void => {
+      for (const dispose of liveDisposers) {
+        try { dispose() } catch { /* 槽位服务可能已经撤掉了 */ }
+      }
+      liveDisposers.length = 0
+      liveDisposers.push(...registerAllSlots())
+    }
+
+    /**
+     * 把 `settingsScope` 绑到宿主真正在服务的命名空间上，并在答案变化时重绑槽位。
+     */
+    const bindSettingsScope = (): void => {
+      const forms = (ctx as unknown as { get?(name: string): unknown }).get?.('configForms') as
+        | (ConfigFormsFace & {
+          whileServed?(
+            namespaces: readonly string[],
+            register: (served: ReadonlySet<string>) => () => void,
+          ): () => void
+        })
+        | undefined
+
+      if (forms === undefined) {
+        // 宿主没提供设置面：卡片退化成只读，这是文档写明的降级。
+        rebindSlots()
+        return
+      }
+
+      const whileServed = forms.whileServed
+      if (typeof whileServed !== 'function') {
+        // 旧版本宿主没有边沿通知：惰性作用域仍然可用，只是要自己重绑一次。
+        rebindSlots()
+        return
+      }
+
+      ctx.effect(() => whileServed.call(forms, MINIMAX_SETTINGS_NAMESPACE_CANDIDATES, served => {
+        // 候选表是**有序**的：宿主实际服务的第一个拼法胜出。最后的正则扫描是
+        // 兜底——部署方可能用我们没预料到的包装前缀给这个条目命名。
+        // 惰性作用域自己会解析命名空间；这里只负责让渲染器**重新求值** inject
+        // （它按对象身份缓存结果，不重绑的话新的 settingsScope 永远不会被看到）。
+        rebindSlots()
+        return () => {
+          for (const dispose of liveDisposers) {
+            try { dispose() } catch { /* 已经撤过 */ }
+          }
+          liveDisposers.length = 0
+        }
+      }), 'dsh-connect-minmax: settings namespace binding')
+
+      // 不等边沿：首次镜像若已经包含我们的命名空间，边沿会在 whileServed 内部
+      // 同步触发；但镜像可能先给出一个不含我们的答案，那也要先把卡片画出来
+      // （只读），而不是等一个可能永远不来的第二次答案。
+      if (liveDisposers.length === 0) rebindSlots()
+    }
+
+    bindSettingsScope()
   } catch (error: unknown) {
     // 页面上静默降级：宿主那半边照样供模型。开发者能在浏览器控制台看到原因。
     console.error('[dsh-connect-minmax] client card failed to load (host provider unaffected):', error)
   }
+}
+
+/** `configForms` 服务的形状（只取本插件用到的部分）。 */
+interface ConfigFormsFace {
+  describe(): {
+    getSnapshot(): { view?: { namespaces?: readonly { ns: string, value?: unknown }[] } }
+    subscribe?(listener: () => void): () => void
+  }
+  get(ns: string): MiniMaxSettingsScope | undefined
 }

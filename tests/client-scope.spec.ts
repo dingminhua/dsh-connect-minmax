@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createLazySettingsScope } from '../src/client/scope.ts'
+import { MINIMAX_SETTINGS_NAMESPACE_CANDIDATES, MINIMAX_SETTINGS_NS } from '../src/status-paths.ts'
 
 /** 我们的配置长什么样（`modelContextWindows` 是独有字段）。 */
 const OUR_VALUE = {
@@ -126,5 +127,18 @@ describe('命名空间兜底', () => {
     const scope = createLazySettingsScope(ctxWith(forms))
     await expect(scope?.set('models', [])).resolves.toBe(false)
     expect(scope?.getSnapshot()).toEqual({})
+  })
+})
+
+describe('命名空间候选（workbuddy 同款做法）', () => {
+  it('候选表按优先级排列，且覆盖宿主的 include: 拼法', () => {
+    // 宿主把 Loader 条目命名成 `include:<短名>`（profile 实测全是这种形状），
+    // 裸包名永远匹配不上——这就是"能点但存不进去"的机制。
+    expect(MINIMAX_SETTINGS_NAMESPACE_CANDIDATES[0]).toBe('dsh-connect-minmax')
+    expect(MINIMAX_SETTINGS_NAMESPACE_CANDIDATES).toContain('include:dsh-connect-minmax')
+  })
+
+  it('短名兜底存在（旧宿主 / 声明名场景）', () => {
+    expect(MINIMAX_SETTINGS_NAMESPACE_CANDIDATES).toContain(MINIMAX_SETTINGS_NS)
   })
 })
