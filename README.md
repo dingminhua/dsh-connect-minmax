@@ -89,6 +89,50 @@ Harness  ──pi-ai anthropic-messages──▶  https://agent.minimax.cn/mavis
   仍失败则报 `AUTH` 并提示「请在 MiniMax Code 中重新登录」。
   **插件从不主动让 MiniMax Code 登出**（那会毁掉用户的登录态）。
 
+## 设置卡片
+
+插件页里这张卡片与同族插件（qoder / workbuddy / trae）同一形态：顶部两个**区域 tab**，
+下面是**账号 / 模型 / 诊断**三个子页。
+
+- **区域 tab**：每个区域是一个独立供应商（`minimax` / `minimax-global`），各有各的登录态、
+  积分与模型。绿点回答「这一侧能不能用」，复选框回答「这一侧要不要注册」。两边可以同时开着，
+  不同会话各选各的，改一侧不影响另一侧。至少保留一个区域——全关掉等于让插件什么都不注册。
+- **账号**：本机登录与已接管副本分列（副本可删除），下面是积分余额、批次到期与七天一签。
+- **模型**：勾选启用哪些模型、切换 1M 长上下文档、逐个「测试」（走 `prepareCall → stream`
+  这条真实通路，不是另造一个裸请求）。
+- **诊断**：这张卡片**实际读到了什么**——区域、上游域名、当前服务账号、凭据来源、积分读取
+  时间、目录与已启用模型数、账号池、最近一次失败。这一页没有任何会改动设置的控件。
+
+卡片可以写回 `models` / `regions` / `longContext` 三个配置字段（也就是上面「配置」表里已有的
+那几项），写完会**回读校验**：设置面板可能返回「成功」但值没落地，不校验就会出现「复选框打上
+勾、配置纹丝不动」的假成功。宿主没有提供设置写入面时，整张卡片退化成只读并说明原因。
+
+**刻意没做的控件**：逐模型的「支持图片」「可关思考」开关。那是上游决定的**事实**
+（`MiniMax-M2.7` 就是不能输入图片），不是用户偏好；做成可勾的复选框等于给用户一个
+改了也不生效、甚至会让声明与真实能力不符的假控件。
+
+## 积分与每日签到
+
+MiniMax Code 的账户接口实测可用，插件只读展示、不代做决策：
+
+| 内容 | 接口 |
+| --- | --- |
+| 余额 | `POST {matrix}/commerce/get_membership_info` → `op_credit_summary.total_remaining_amount` |
+| 批次到期 | `GET {cloud}/credit/details?page_number=1&page_size=100` → 每笔 `expire_at_ms` |
+| 签到进度 | `GET {cloud}/signin/status?timezone_id=Asia/Shanghai` → 七天一轮 |
+
+三个坑（都已在实现里处理，依据见 `docs/research/upstream.md` §6.3）：
+
+- 余额必须读 `op_credit_summary`；同响应里的 `total_remains_credit` / `opcredit_balance`
+  在已迁移积分池的账号上**恒为 0**，读它们会显示「0 积分」。
+- 台账的 `page_size` 太小（实测 3）会让上游回 `50001 internal error`，所以固定取 100。
+- `timezone_id` 是必需参数且必须是 IANA 名字，缺失或传偏移量回 `1406010011`。
+
+**「领取今天」只有点按钮才会发请求**，绝不自动签到；而且发之前会先问一次签到状态，
+服务端说今天不能领（四值状态：未到 / 可领 / 已领 / 不发）就不发写请求。
+
+积分数据按路由缓存 60 秒：卡片每 10 秒轮询一次，不缓存就会变成每 10 秒打上游 6 次。
+
 ## 多账号（账号副本）
 
 MiniMax Code 每个区域只能留一个登录账号（国内 + 国际各一个）。插件会把本机登录**镜像**成
@@ -130,6 +174,8 @@ MiniMax Code 每个区域只能留一个登录账号（国内 + 国际各一个�
 | 卡片显示"未登录" | MiniMax Code 没登录。打开它登录后点卡片上的刷新 |
 | 卡片显示"仅本地文件凭据" | MiniMax Code 没运行。token 未过期前可用，过期后请启动它 |
 | 对话报 `AUTH` | token 被服务端撤销。在 MiniMax Code 里重新登录（必要时退出再登录） |
+| **只有一侧能用**，另一侧报 `401 invalid access token` | 认证租约只服务「当前活跃账号」，协议里没有区域参数。插件会用 `generation` 判别租约属于哪个区域，不属于本区域时改用本区域盘上凭据。若盘上凭据也已过期，这一侧就只能等 MiniMax Code 把它续上（在客户端里切到该区域登录一次） |
+| 积分那一栏显示上游错误原文（如 `HTTP 401`） | 积分走的是**账户接口**，与推理网关是两条通路：能对话不代表能读积分。重新登录该区域即可 |
 | 报 `CONTEXT_WINDOW_EXCEEDED` | 上下文超了，用 `/compact` 或换新会话 |
 | 卡在思考很久 | M3 系列默认思考；把档位调低，或换 `MiniMax-M3` 并选 `off` |
 
@@ -142,6 +188,10 @@ node scripts/verify-upstream.mjs --full   # 再加 thinking / 工具 / 流式
 pnpm build && node scripts/e2e-plugin.mjs              # 走插件自己的适配器跑一轮真实对话
 node scripts/e2e-plugin.mjs MiniMax-M3 --tools         # 带工具调用
 node scripts/verify-upstream.mjs --matrix             # 逐模型核对 thinking 的线上形态
+
+# 状态投影与三条动作接口（真 http server，绕开宿主对插件模块的缓存）
+node scripts/e2e-actions.mjs                          # 只读；签到领取默认跳过
+node scripts/e2e-actions.mjs --claim                  # 真的领当天积分（会改变账户状态）
 ```
 
 ## 开发

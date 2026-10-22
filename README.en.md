@@ -15,9 +15,13 @@ The model picker then shows the **MiniMax (local sign-in)** group. Restart Harne
 
 ## How credentials are obtained
 
-1. **Auth Lease Broker (preferred)** — MiniMax Code exposes a local unix socket
+1. **Auth Lease Broker (preferred, region-checked)** — MiniMax Code exposes a local unix socket
    (`~/.minimax/run/mcode-auth-lease-v1.sock`) that issues short-lived access tokens. The broker refreshes
-   them, so the plugin needs no credential lifecycle of its own.
+   them, so the plugin needs no credential lifecycle of its own. **The lease protocol has no region
+   parameter**: it only ever serves the account MiniMax Code currently considers active. With both regions
+   signed in (this plugin's default shape) the plugin therefore compares the lease's `generation` against
+   this region's on-disk record and only uses the lease when they match — otherwise the cn route would be
+   handed the global token and fail with `401 invalid access token` on the whole path.
 2. **Local credential file (read-only fallback)** — when MiniMax Code is not running, the plugin reads
    `~/.minimax/auth/<env>/<region>/mcode-public/auth.json` and only uses a still-valid token.
 
@@ -45,6 +49,59 @@ only sends the accepted values.
 
 Known gaps: the host only has text/image modalities, so **video input cannot be expressed**; and the
 1M context tier is exposed as the `longContext` plugin option instead of a per-model menu entry.
+
+## Settings card
+
+The card on the plugin page follows the same shape as its siblings (qoder / workbuddy / trae): two
+**region tabs** on top, then **Account / Models / Diagnostics** sub-tabs.
+
+- **Region tabs**: each region is a separate provider (`minimax` / `minimax-global`) with its own
+  sign-in, credits and models. The dot answers "can this side be used", the checkbox answers "should
+  this side be registered". Both can stay on; different sessions may pick either side. At least one
+  region must remain enabled — turning off the last one would leave the plugin with nothing to register.
+- **Account**: local sign-in and taken-over copies (deletable), plus credit balance, per-lot expiry and
+  the seven-day check-in strip.
+- **Models**: choose which models are enabled, switch the 1M context tier, and test a model one by one.
+  Testing goes through `prepareCall → stream` — the real path, not a hand-rolled fetch that would
+  measure something the user never actually uses.
+- **Diagnostics**: what this card **actually read** — region, upstream host, serving account, credential
+  source, when credits were read, catalog and enabled model counts, account pool, last error. This page
+  has no control that changes settings.
+
+The card can write back the `models` / `regions` / `longContext` config fields and **verifies each write
+by reading it back**: the settings surface may report success without the value landing, and without that
+check the card would tick a checkbox while the config stayed unchanged. When the host exposes no settings
+surface, the whole card degrades to read-only and says so.
+
+**Deliberately absent**: per-model "supports images" / "thinking can be off" toggles. Those are facts
+decided upstream (`MiniMax-M2.7` simply cannot take image input), not preferences; making them checkboxes
+would hand the user a control that changes nothing — or worse, one that makes the declared capability
+disagree with reality.
+
+## Credits and daily check-in
+
+MiniMax Code's account endpoints work and are read-only here; the plugin never decides for you:
+
+| What | Endpoint |
+| --- | --- |
+| Balance | `POST {matrix}/commerce/get_membership_info` → `op_credit_summary.total_remaining_amount` |
+| Per-lot expiry | `GET {cloud}/credit/details?page_number=1&page_size=100` → each `expire_at_ms` |
+| Check-in progress | `GET {cloud}/signin/status?timezone_id=Asia/Shanghai` → a seven-day cycle |
+
+Three traps (all handled; evidence in `docs/research/upstream.md` §6.3):
+
+- Read the balance from `op_credit_summary`. The sibling fields `total_remains_credit` /
+  `opcredit_balance` are permanently `0` on accounts migrated to the credit pool, so reading them shows
+  "0 credits".
+- A small `page_size` (3 in testing) makes the ledger endpoint return `50001 internal error`; we ask for 100.
+- `timezone_id` is required and must be an IANA name; an offset gets `1406010011`.
+
+**"Claim today" only fires when the button is pressed** — never automatically — and it asks the status
+endpoint first: the day cell has four states (not yet / claimable / claimed / no grant), so anything
+other than "claimable" means no write request is sent at all.
+
+Credits are cached per route for 60 seconds: the card polls every 10 seconds, and without the cache that
+would become six upstream calls per 10 seconds.
 
 ## Icon
 

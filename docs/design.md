@@ -155,11 +155,18 @@ export class MiniMaxAdapter extends PiAiAdapter { constructor(options: PiAiAdapt
 
 - 槽位：`plugins.bundle.config` / `plugins.row.config`；key 同时注册 scoped 与裸包名两种拼法
   （宿主可能按 `@dmh2002/dsh-connect-minmax`、`dsh-connect-minmax`、`include:…` 或 `<包名>#<行 id>` 查）。
-- 展示：聚合登录徽标（任一路由「已登录」即为 ready）、每条路由一行（供应商 / 区域 / 登录态 / 到期）、
-  未就绪区域各一句"去哪儿登录"、模型数量与清单、最近一次错误。
+- 形态（0.5.0，对齐同族）：顶部两个**区域 tab**（每个是独立供应商，绿点=可用性、复选框=是否注册），
+  下面**账号 / 模型 / 诊断**三个子页。参考图存在 `docs/reference/qoder-*.webp`。
+- 展示：聚合登录徽标（任一路由「已登录」即为 ready）、账号与模型各成行、未就绪区域各一句"去哪儿登录"、
+  积分余额与批次到期、七天一签、最近一次错误。
 - 数据：宿主 `webServer` 路由 `/plugins/dsh-connect-minmax/status` 返回 JSON；
   客户端 10s 轮询（页面可见时）。
-- 文案：`ctx.locale.register` 中文/英文；插件管理器用 `locale/*.json`。
+- 写入：只写 `models` / `regions` / `longContext` 三个既有配置字段，经 `configForms` 软探测拿到的
+  `settingsScope` 落盘，并**回读校验**（`set()` 返回 `false` 是"被拒"不是"抛错"）。
+  `configForms` **不进 `inject`**：Cordis 的依赖门禁是硬的，写进去会让"宿主不提供该服务"变成
+  "整个客户端插件一次都不跑"。
+- 文案：`ctx.locale.register` 中文/英文；插件管理器用 `locale/*.json`。中英键 1:1 由
+  `Record<MiniMaxSettingsKey, string>` 在编译期强制。
 
 ## 7. 验收标准
 
@@ -169,12 +176,22 @@ export class MiniMaxAdapter extends PiAiAdapter { constructor(options: PiAiAdapt
 4. 设置卡片显示登录态与来源；关掉 MiniMax Code 后卡片提示「本地文件兜底 / 需登录」。
 5. 无任何 API Key 输入项；插件不写 `~/.minimax` 下任何文件。
 
-## 8. 非目标（v1）
+## 8. 非目标与已撤销的判断
 
-- 官方 API Key / 平台账号（api.minimaxi.com）路线。
-- 额度/积分查询（需 md5 签名，见 upstream.md §9）。
-- 图片生成、账号池、签到。
-- 自己发起 OAuth 设备码登录（协议已摸清，留作 v1.1 的「登录恢复」按钮）。
+仍然不做：
+
+- 官方 API Key / 平台账号（api.minimaxi.com）路线——本插件只做"复用本机登录态"这一件事。
+- 图片生成 / 视频输入（DSH 只有 `text` / `image` 两种模态，视频无法表达）。
+- 自己发起 OAuth 设备码登录（协议已摸清，见 §9 与 upstream.md，留作后续「登录恢复」按钮）。
+
+**曾经判断错、已被实测撤销的**（0.5.0）：
+
+- ~~"额度/积分查询需要 md5 签名，优先级低，v1 不做"~~ → **不需要签名**。三条账户接口只带
+  `Authorization: Bearer <mmoat_…>` 即可，实测通过，见 upstream.md §6.3。
+- ~~"MiniMax Code 没有签到机制"~~ → 有，七天一轮，`/minimax-cloud/api/v1/signin/*`。
+
+这两条记在这里是因为它们**曾经以"上游没有这个能力"的形式写进设计文档**，而真实原因是
+当时没测。以后要否掉一个功能，必须给出"测过、返回什么"，不能只给推断。
 
 ## 9. 多账号：账号副本（0.4.0）
 
@@ -217,3 +234,35 @@ mcode 每区域只能留一个账号（国内 + 国际各一个）。
   需要重新登录该账号再镜像一次。
 - 副本的账号身份只由 `loginEpoch`（每次登录的 UUID）标识，服务端 token 里没有账号 id，
   所以展示名只能叫「副本 1/2」。
+
+
+## 10. 认证租约的区域归属（0.5.0，严重）
+
+`~/.minimax/run/mcode-auth-lease-v1.sock` 这个 broker **没有区域参数**：`lease` 只接受
+`minValidityMs`，返回的是"当前活跃账号"的令牌。本机同时登录国内版与国际版时（本插件默认
+就是两条路由），`token()` 若无条件优先采用租约，国内版路由就会拿到国际版的令牌，实测：
+
+```
+disk  (cn, generation 15) → gateway 200 · account 200
+lease (broker, generation 11 = en 的) → gateway 401 · account 401
+```
+
+即整条国内版通路挂掉，不是"积分读不到"这种附加信息缺失。
+
+判别字段只有 `generation`：mcode 按账号单调递增它，broker 的 `generation` 与本区域
+`auth.json` record 的 `generation` 相等，才说明两边说的是同一个账号。
+
+规则：
+
+| 情形 | 处理 |
+| --- | --- |
+| 租约 `generation` == 本区域盘上 `generation` | 采用租约（mcode 负责刷新，零副作用） |
+| 不等 | 跳过租约，改用本区域盘上凭据，并把原因写进 `lastFailure`（措辞是"另一个区域"，不是"租约坏了"） |
+| 盘上没有可比对的 `generation` | 保持旧行为采用租约：那种情况下本区域也没有别的凭据，拒绝只会把"可能能用"变成"一定不能用" |
+
+**为什么不能反过来"总是用盘上凭据"**：mcode 续期后先更新内存里的 broker，文件可能滞后；
+只读文件会在 broker 刚续完的那一刻用一个已过期的令牌。两边都要用，用 `generation` 决定用哪个。
+
+回归测试在 `tests/auth.spec.ts`（4 条，已验证：去掉修复即红）。假 broker 与盘上 fixture 的
+`generation` 默认值都是 2，所以**跨区场景在加这 4 条之前完全没有覆盖**——这也是这个 bug
+能活到 0.5.0 的原因。
