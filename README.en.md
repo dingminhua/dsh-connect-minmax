@@ -46,6 +46,12 @@ only sends the accepted values.
 Known gaps: the host only has text/image modalities, so **video input cannot be expressed**; and the
 1M context tier is exposed as the `longContext` plugin option instead of a per-model menu entry.
 
+## Icon
+
+`icons/*.png` is the shared `dsh-connect-*` family icon (the same file as workbuddy / trae /
+qoder). MiniMax's brand marks are deliberately not used: this plugin reads your own local
+sign-in and does not impersonate the official client.
+
 ## Configuration
 
 | Field | Default | Meaning |

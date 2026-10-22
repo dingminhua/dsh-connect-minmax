@@ -10,7 +10,8 @@
 - 新增 `globalBaseUrl`，用于覆盖国际版托管地址（`baseUrl` 仍管国内版）。
 - **包名收拢到 scope**：`@dmh2002/dsh-connect-minmax`；插件行 id 仍是 `dsh-connect-minmax`，
   设置命名空间与状态路由 `/plugins/dsh-connect-minmax/status` 不变。
-- **图标换成 MiniMax Code 的应用图标**（`icons/*.png`），不再用自绘字形。
+- **图标改用 `dsh-connect-*` 家族统一图标**（与 workbuddy / trae / qoder 同一份文件），
+  不再用自绘字形，也不用厂商 logo。
 - 设置卡片：顶部徽标改为跨区域聚合；新增「路由」表（供应商 / 区域 / 登录态 / 到期），
   未就绪的区域逐条给出去哪儿登录的建议。
 - 设备码登录等待期（broker `authorizing`）单独成一档状态，卡片显示验证码与授权链接；

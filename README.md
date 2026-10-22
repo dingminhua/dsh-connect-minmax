@@ -89,6 +89,11 @@ Harness  ──pi-ai anthropic-messages──▶  https://agent.minimax.cn/mavis
   仍失败则报 `AUTH` 并提示「请在 MiniMax Code 中重新登录」。
   **插件从不主动让 MiniMax Code 登出**（那会毁掉用户的登录态）。
 
+## 图标
+
+`icons/*.png` 用 `dsh-connect-*` 插件家族的统一图标（与 workbuddy / trae / qoder 同一份
+文件），不使用 MiniMax 的品牌标识——本插件读的是你自己的本机登录态，不冒充官方客户端。
+
 ## 配置
 
 插件行 `dsh-connect-minmax` 的 `config`（都可留空）：

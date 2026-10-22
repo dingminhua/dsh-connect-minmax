@@ -70,5 +70,9 @@ capability 文件约定）来自对**本机已安装**的 MiniMax Code 客户端
 
 ## 图标 / Icons
 
-`icons/dsh-connect-minmax-64.png` 与 `icons/dsh-connect-minmax-128.png` 是本项目
-**原创**生成的图形（脚本化绘制的圆角底板 + M 字形 + 圆点），可自由再分发。
+`icons/dsh-connect-minmax-64.png` 与 `icons/dsh-connect-minmax-128.png` 使用
+`dsh-connect-*` 插件**家族统一图标**（与 `dsh-connect-workbuddy` / `dsh-connect-trae` /
+`dsh-connect-qoder` 同一份文件，SHA-256 一致），可自由再分发。
+
+不使用 MiniMax / MiniMax Code 的品牌标识：本插件读取的是用户自己的本机登录态，
+不冒充官方客户端，因此图标也不采用厂商 logo。
