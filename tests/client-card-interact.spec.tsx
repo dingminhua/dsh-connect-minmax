@@ -183,7 +183,7 @@ describe('模型页勾选写入', () => {
     const scope = recordingScope(() => payload)
     await mount(scope)
     await clickText('.dsm-minimax-subtab', 'panel.models')
-    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-row input[type=checkbox]'))
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
     // 第一个模型行：[0] 是"启用模型"。
     await act(async () => {
       boxes[0]?.click()
@@ -199,7 +199,7 @@ describe('模型页勾选写入', () => {
     const scope = recordingScope(() => payload)
     await mount(scope)
     await clickText('.dsm-minimax-subtab', 'panel.models')
-    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-row input[type=checkbox]'))
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
     await act(async () => {
       boxes[0]?.click()
     })
@@ -226,30 +226,35 @@ describe('模型页勾选写入', () => {
     expect(container.innerHTML).not.toContain('models.selectAll')
   })
 
-  it('上下文档位 radio：改档位写 modelContextWindows', async () => {
+  it('上下文档位下拉：改档位写 modelContextWindows', async () => {
     let payload = statusPayload()
     mockRoutes({ status: () => payload })
     const scope = recordingScope(() => payload)
     await mount(scope)
     await clickText('.dsm-minimax-subtab', 'panel.models')
-    const radios = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-row input[type=radio]'))
-    expect(radios.length).toBeGreaterThanOrEqual(2)
-    // 第二个 radio 是 1M 档（workbuddy 同款：逐档 radio 而不是下拉框）。
-    await act(async () => { radios[1]?.click() })
+    const select = container.querySelector<HTMLSelectElement>('.dsm-minimax-inline-select')
+    expect(select).toBeDefined()
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+      setter?.call(select, '1000000')
+      select?.dispatchEvent(new Event('change', { bubbles: true }))
+    })
     await settle()
     const write = scope.writes.find(entry => entry.field === 'modelContextWindows')
     expect(write?.value).toMatchObject({ 'MiniMax-M3.1-Flash': 1_000_000 })
   })
 
-  it('只有单档的模型只画一个（禁用）档，用户看得出没有别的选择', async () => {
+  it('只有单档的模型也画一个（禁用的）档位选择器', async () => {
     mockRoutes({ status: () => statusPayload() })
     await mount(recordingScope(() => statusPayload()))
     await clickText('.dsm-minimax-subtab', 'panel.models')
-    const rows = Array.from(container.querySelectorAll('.dsm-minimax-row'))
-    const m27 = rows.find(row => row.textContent?.includes('MiniMax-M2.7'))
-    const radios = Array.from(m27?.querySelectorAll<HTMLInputElement>('input[type=radio]') ?? [])
-    expect(radios).toHaveLength(1)
-    expect(radios[0]?.disabled).toBe(true)
+    const rows = Array.from(container.querySelectorAll('.dsm-minimax-model'))
+    // 行标题显示的是人类可读名（M2.7），不是 id —— 与 Qoder 的模型页一致。
+    const m27 = rows.find(row => row.querySelector('.dsm-minimax-model-name')?.textContent?.includes('M2.7') === true)
+    const select = m27?.querySelector<HTMLSelectElement>('.dsm-minimax-inline-select')
+    expect(select).toBeDefined()
+    expect(select?.disabled).toBe(true)
+    expect(select?.options).toHaveLength(1)
   })
 })
 

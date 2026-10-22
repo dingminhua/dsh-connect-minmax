@@ -195,6 +195,12 @@ function rowSide(name: string): string {
   return row?.querySelector('.dsm-minimax-row-side')?.textContent ?? ''
 }
 
+/** 模型页里某个模型的行（按显示名匹配：行标题现在是人名，不是 id）。 */
+function modelRowOf(name: string): HTMLElement | undefined {
+  return Array.from(container.querySelectorAll<HTMLElement>('.dsm-minimax-model'))
+    .find(row => row.querySelector('.dsm-minimax-model-name')?.textContent?.includes(name) === true)
+}
+
 /** 账号页里某个路由的行；不存在时返回 undefined（供"不该出现"的断言用）。 */
 function accountRowOf(name: string): HTMLElement | undefined {
   return cardRowOf(name)
@@ -224,7 +230,7 @@ describe('MiniMaxCard 渲染', () => {
     }))
     await mount(writableScope())
     await clickPanel('models')
-    const row = cardRowOf('MiniMax-M3')
+    const row = modelRowOf('MiniMax M3')
     const boxes = Array.from(row?.querySelectorAll<HTMLInputElement>('input[type=checkbox]') ?? [])
     // 第一个是"启用该模型"（勾着），第二个是"发图片"（被掩码成未勾，但仍可点）。
     expect(boxes.length).toBeGreaterThanOrEqual(2)
@@ -240,7 +246,7 @@ describe('MiniMaxCard 渲染', () => {
     }))
     await mount(writableScope())
     await clickPanel('models')
-    const row = cardRowOf('MiniMax-M2.7')
+    const row = modelRowOf('MiniMax M2.7')
     // 「启用模型」+「可关闭思考」两个复选框；图片那一项**没有**复选框（上游不支持）。
     expect(row?.querySelectorAll('input[type=checkbox]').length ?? 0).toBe(2)
     expect(row?.textContent ?? '').toContain('models.imageNo')
@@ -256,8 +262,8 @@ describe('MiniMaxCard 渲染', () => {
     expect(html).not.toContain('MiniMax-M3')
     await clickPanel('models')
     const models = container.innerHTML
-    expect(models).toContain('MiniMax-M3')
-    expect(models).toContain('MiniMax-M2.7')
+    expect(models).toContain('MiniMax M3')
+    expect(models).toContain('MiniMax M2.7')
   })
 
   it('未登录时给出"去 MiniMax Code 登录"的建议', async () => {
@@ -625,20 +631,40 @@ describe('模型行样式与结构一致', () => {
     const style = document.createElement('style')
     style.textContent = MINIMAX_CARD_CSS
     document.head.appendChild(style)
-    const row = container.querySelector('.dsm-minimax-row') as HTMLElement
-    const head = row.querySelector('.dsm-minimax-model-head')
-    const tiers = row.querySelector('.dsm-minimax-tiers')
-    const details = row.querySelector('.dsm-minimax-model-details')
-    expect(head).not.toBeNull()
-    expect(tiers).not.toBeNull()
-    expect(details).not.toBeNull()
-    expect(getComputedStyle(head as Element).display).toBe('flex')
-    expect(getComputedStyle(tiers as Element).display).toBe('inline-flex')
-    // 行必须允许换行，否则三段结构会被硬塞进一行、把左侧压到逐字竖排。
-    expect(getComputedStyle(row).flexWrap).toBe('wrap')
-    // 模型 id 不能再是 anywhere——那是逐字竖排的直接原因。
-    // （CSS 里允许 break-word，但必须 nowrap。）
-    expect(getComputedStyle(row.querySelector('.dsm-minimax-model-id') as Element).whiteSpace).toBe('nowrap')
+    const row = container.querySelector('.dsm-minimax-model') as HTMLElement
+    expect(row).not.toBeNull()
+    // 单列 grid：每行独立成块，行内元素不再互相挤压（竖排那次就是缺这个）。
+    expect(getComputedStyle(row).display).toBe('grid')
+    const head = row.querySelector('.dsm-minimax-model-head') as HTMLElement
+    const tools = row.querySelector('.dsm-minimax-model-tools') as HTMLElement
+    const meta = row.querySelector('.dsm-minimax-model-meta') as HTMLElement
+    expect(getComputedStyle(head).display).toBe('flex')
+    expect(getComputedStyle(tools).display).toBe('flex')
+    expect(getComputedStyle(meta).display).toBe('flex')
+    // 行内选择器必须是"无边框的文字样式"，不是原生下拉框。
+    const select = row.querySelector('.dsm-minimax-inline-select') as HTMLElement
+    expect(select).not.toBeNull()
+    expect(getComputedStyle(select).appearance).toBe('none')
     style.remove()
+  })
+})
+
+describe('模型页与 Qoder 同款的信息位', () => {
+  it('每个模型行都展示上下文、输出与可选档位', async () => {
+    mockFetch(payload())
+    await mount(writableScope())
+    await clickPanel('models')
+    const row = modelRowOf('MiniMax M3')
+    const meta = row?.querySelector('.dsm-minimax-model-meta')?.textContent ?? ''
+    expect(meta).toContain('models.context')
+    expect(meta).toContain('models.output')
+    expect(meta).toContain('models.reasoningEfforts')
+  })
+
+  it('底部说明这一页只展示上游公布的能力', async () => {
+    mockFetch(payload())
+    await mount(writableScope())
+    await clickPanel('models')
+    expect(container.innerHTML).toContain('models.capabilityNote')
   })
 })

@@ -849,13 +849,14 @@ function ModelPanel(props: {
   onSelectAll(): void
   onTest(modelId: string): void
   onLongContext(enabled: boolean): void
+  onRefresh(): void
   busy: boolean
   message: string | undefined
   t: MiniMaxTranslate
 }): ReactElement {
   const {
     status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onThinkingOff, onReasoningEffort,
-    effortOptions, onSelectAll, onTest, onLongContext, busy, message, t,
+    effortOptions, onSelectAll, onTest, onLongContext, onRefresh, busy, message, t,
   } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
@@ -875,6 +876,14 @@ function ModelPanel(props: {
           </div>
         </div>
         <div className="dsm-minimax-panel-actions">
+          <button
+            type="button"
+            className="dsm-minimax-btn dsm-minimax-btn-outline"
+            disabled={busy}
+            onClick={onRefresh}
+          >
+            {t('models.refresh')}
+          </button>
           <label className="dsm-minimax-inline-check" title={canWrite ? t('models.longContextHint') : t('settings.readOnly')}>
             <input
               type="checkbox"
@@ -916,6 +925,7 @@ function ModelPanel(props: {
 
       {catalog.length === 0 && <p className="dsm-minimax-hint">{t('models.empty')}</p>}
 
+      <div className="dsm-minimax-model-list">
       {catalog.map(model => (
         <ModelRow
           key={model.id}
@@ -925,6 +935,7 @@ function ModelPanel(props: {
           busy={busy}
           probe={probes[`${region}:${model.id}`]}
           route={testRoute?.route}
+          defaultEffort={status.reasoningEffort}
           onToggle={onToggleModel}
           onModelContext={onModelContext}
           onModelImages={onModelImages}
@@ -933,7 +944,11 @@ function ModelPanel(props: {
           t={t}
         />
       ))}
+      </div>
 
+      {/* 与 Qoder 的模型页一致：把"这一页只展示上游明确公布的能力"写在底部，
+          用户就不会指望这里出现上游没声明的档位。 */}
+      <p className="dsm-minimax-hint">{t('models.capabilityNote')}</p>
       {message !== undefined && <p className="dsm-minimax-hint">{message}</p>}
       {!canWrite && <p className="dsm-minimax-hint">{t('settings.readOnly')}</p>}
     </div>
@@ -948,6 +963,7 @@ function ModelRow(props: {
   busy: boolean
   probe: ModelProbe | undefined
   route: string | undefined
+  defaultEffort: string
   onToggle(modelId: string, enabled: boolean): void
   onModelContext(modelId: string, window: number): void
   onModelImages(modelId: string, enabled: boolean): void
@@ -956,92 +972,81 @@ function ModelRow(props: {
   t: MiniMaxTranslate
 }): ReactElement {
   const {
-    model, enabled, canWrite, busy, probe, route,
+    model, enabled, canWrite, busy, probe, route, defaultEffort,
     onToggle, onModelContext, onModelImages, onThinkingOff, onTest, t,
   } = props
   // 上游能力与"当前是否发图"是两件事：`input` 是被 modelImages 掩码后的结果。
   // 只看它就画控件的话，用户一关图片复选框就消失，再也勾不回来了。
   const upstreamImages = (model.upstreamInput.length > 0 ? model.upstreamInput : model.input).includes('image')
   const sendsImages = model.input.includes('image')
-  // 强制思考的模型**不提供** off 档（上游会拒绝），所以这一项要禁用并标出来，
-  // 而不是画一个勾了也不生效的复选框。
+  // 强制思考的模型**不提供** off 档（上游会拒绝），所以这一项要禁用并标出来。
   const offBlocked = model.thinkingMode === 'forced'
+  const tiers = model.contextWindowOptions.length > 0 ? model.contextWindowOptions : [model.contextWindow]
 
   return (
-    <div className={`dsm-minimax-row${enabled ? '' : ' dsm-minimax-row-off'}`}>
-      <div className="dsm-minimax-row-main">
-        <div className="dsm-minimax-model-head">
-          <label className="dsm-minimax-model-check" title={canWrite ? '' : t('settings.readOnly')}>
-            <input
-              type="checkbox"
-              checked={enabled}
-              disabled={!canWrite || busy}
-              onChange={event => { onToggle(model.id, (event.target as HTMLInputElement).checked) }}
-            />
-            <span className="dsm-minimax-model-id">{model.id}</span>
-          </label>
-          {model.badge === undefined
-            ? null
-            : <span className="dsm-minimax-chip dsm-minimax-chip-on">{model.badge}</span>}
-        </div>
+    <div className={`dsm-minimax-model${enabled ? '' : ' dsm-minimax-model-disabled'}`}>
+      <div className="dsm-minimax-model-head">
+        <label className="dsm-minimax-model-enabled" title={canWrite ? '' : t('settings.readOnly')}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={!canWrite || busy}
+            onChange={event => { onToggle(model.id, (event.target as HTMLInputElement).checked) }}
+          />
+          <span className="dsm-minimax-model-name">{model.name}</span>
+          {model.badge === undefined ? null : (
+            <span className="dsm-minimax-model-promo">{model.badge}</span>
+          )}
+        </label>
 
-        <div className="dsm-minimax-model-facts">
+        <div className="dsm-minimax-model-tools">
           {upstreamImages
             ? (
-              <label className="dsm-minimax-inline-check" title={canWrite ? t('models.imageHint') : t('settings.readOnly')}>
+              <label className="dsm-minimax-model-image" title={canWrite ? t('models.imageHint') : t('settings.readOnly')}>
                 <input
                   type="checkbox"
                   checked={sendsImages}
                   disabled={!canWrite || busy}
-                  onChange={event => {
-                    onModelImages(model.id, (event.target as HTMLInputElement).checked)
-                  }}
+                  onChange={event => { onModelImages(model.id, (event.target as HTMLInputElement).checked) }}
                 />
-                {t('models.imageYes')}
+                <span>{t('models.imageYes')}</span>
               </label>
             )
-            : <span className="dsm-minimax-chip">{t('models.imageNo')}</span>}
+            : <span className="dsm-minimax-model-image dsm-minimax-model-image-off">{t('models.imageNo')}</span>}
 
           <label
-            className="dsm-minimax-inline-check"
+            className={`dsm-minimax-model-off${offBlocked ? ' dsm-minimax-model-off-blocked' : ''}`}
             title={offBlocked ? t('models.thinkingOffRefusedHint') : t('models.thinkingOffHint')}
           >
             <input
               type="checkbox"
               checked={!offBlocked && model.thinkingOff}
               disabled={!canWrite || busy || offBlocked}
-              onChange={event => {
-                onThinkingOff(model.id, (event.target as HTMLInputElement).checked)
-              }}
+              onChange={event => { onThinkingOff(model.id, (event.target as HTMLInputElement).checked) }}
             />
-            {t('models.thinkingOff')}
+            <span>{t('models.thinkingOff')}</span>
+            {offBlocked ? <span className="dsm-minimax-model-off-flag">{t('models.thinkingOffRefused')}</span> : null}
           </label>
-          {offBlocked && <span className="dsm-minimax-chip">{t('models.thinkingOffRefused')}</span>}
-        </div>
-      </div>
 
-      <div className="dsm-minimax-row-side">
-        {/* 上下文档位：按模型**真实提供**的档位逐级画 radio，不给一个上游不受理的值。
-            单档模型只画一个（禁用）档，用户看得出"这个模型没有别的选择"。 */}
-        <fieldset className="dsm-minimax-tiers" aria-label={t('models.tierLabel')}>
-          {model.contextWindowOptions.map(option => (
-            <label key={option} title={option >= 1_000_000 ? t('models.higherUsage') : undefined}>
-              <input
-                type="radio"
-                name={`tier-${model.id}`}
-                checked={model.contextWindow === option}
-                disabled={!canWrite || busy || model.contextWindowOptions.length <= 1}
-                onChange={() => { onModelContext(model.id, option) }}
-              />
-              <span>{formatContextWindow(option)}</span>
-            </label>
-          ))}
-        </fieldset>
+          {/* 上下文档位：行内下拉，选项**只**来自上游声明的档位。单档模型也画一个
+              （禁用）选择器——"只有这一档"本身是信息，不画反而让人以为没读到。 */}
+          <span className="dsm-minimax-inline-picker" title={t('models.tierLabel')}>
+            <select
+              className="dsm-minimax-inline-select"
+              value={String(model.contextWindow)}
+              disabled={!canWrite || busy || tiers.length <= 1}
+              onChange={event => { onModelContext(model.id, Number((event.target as HTMLSelectElement).value)) }}
+            >
+              {tiers.map(option => (
+                <option key={option} value={String(option)}>{formatContextWindow(option)}</option>
+              ))}
+            </select>
+            <span className="dsm-minimax-inline-caret" aria-hidden="true">▾</span>
+          </span>
 
-        <div className="dsm-minimax-model-actions-buttons">
           <button
             type="button"
-            className="dsm-minimax-btn dsm-minimax-btn-outline"
+            className="dsm-minimax-model-test"
             disabled={busy || !enabled || route === undefined}
             onClick={() => { onTest(model.id) }}
           >
@@ -1050,16 +1055,24 @@ function ModelRow(props: {
         </div>
       </div>
 
-      <div className="dsm-minimax-model-details">
-        <div className="dsm-minimax-model-meta">
-          <span>{t('models.context')} {formatContextWindow(model.contextWindow)}</span>
-          <span>{t('models.output')} {formatContextWindow(model.maxTokens)}</span>
-          <span>{t('models.reasoningEfforts')} {model.efforts.join(' / ')}</span>
-        </div>
+      <div className="dsm-minimax-model-meta">
+        <span>{t('models.context')} {formatContextWindow(model.contextWindow)}</span>
+        <span>{t('models.output')} {formatContextWindow(model.maxTokens)}</span>
+        {/* 思考强度是 **provider 级**的单一默认值：pi-ai 的模型级描述只有"可选
+            档位集合"，没有"每模型默认档"。这里如实显示共用值，而不是画一个
+            改了也不生效的逐模型下拉。 */}
+        <span>
+          {t('models.effort')} <span className="dsm-minimax-meta-tag">{defaultEffort}</span>
+          {' '}
+          {t('models.effortShared')}
+        </span>
+        <span className="dsm-minimax-model-efforts">
+          {t('models.reasoningEfforts')} {model.efforts.join(' / ')}
+        </span>
       </div>
 
       {probe !== undefined && (
-        <p className={`dsm-minimax-hint${probe.ok === false ? ' dsm-minimax-error' : ''}`} style={{ marginTop: '4px' }}>
+        <p className={`dsm-minimax-hint${probe.ok === false ? ' dsm-minimax-error' : ''}`}>
           {probe.busy ? t('models.testing') : probe.detail ?? ''}
         </p>
       )}
@@ -1421,6 +1434,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
                   onLongContext={enabled => { void handleLongContext(enabled) }}
+                  onRefresh={() => { void load() }}
                   busy={busy}
                   message={actionMessage}
                   t={translate}
