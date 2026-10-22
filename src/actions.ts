@@ -32,6 +32,8 @@ import { invalidateAccountCache, isLoopbackRequest, json, safeMessage } from './
 import {
   MINIMAX_ACCOUNT_MOVE_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
+  MINIMAX_DEVICE_CANCEL_PATH,
+  MINIMAX_DEVICE_START_PATH,
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_ACCOUNT_TRANSFER_PATH,
@@ -45,6 +47,8 @@ import type { MiniMaxImportResult, MiniMaxTransferFile } from './accounts.ts'
 export {
   MINIMAX_ACCOUNT_MOVE_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
+  MINIMAX_DEVICE_CANCEL_PATH,
+  MINIMAX_DEVICE_START_PATH,
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_ACCOUNT_TRANSFER_PATH,
@@ -84,6 +88,10 @@ export interface MiniMaxActionDeps {
   importAccounts?(raw: string, ids: readonly string[]): Promise<MiniMaxImportResult>
   /** 调整池里副本的优先级；`up`/`down`。 */
   moveAccount?(region: MiniMaxRegion, id: string, direction: 'up' | 'down'): Promise<boolean>
+  /** 发起设备码登录；返回会话视图。 */
+  startDeviceLogin?(region: MiniMaxRegion): Promise<unknown>
+  /** 取消一个设备码登录会话。 */
+  cancelDeviceLogin?(id: string): void
   testModel(route: string, model: string, signal?: AbortSignal): Promise<MiniMaxModelTestResult>
   /**
    * 把池里某个账号设为某区域的当前账号。
@@ -354,6 +362,39 @@ export function registerMiniMaxActionRoutes(
       if (deps.moveAccount === undefined) return json(res, 503, { error: '调整顺序不可用。' })
       const moved = await deps.moveAccount(region, id, direction)
       if (!moved) return json(res, 404, { error: 'account not in this region pool' })
+      return json(res, 200, { ok: true })
+    },
+  }))
+
+  // ---------------------------------------------------------------
+  // POST /account/device/start|cancel —— 设备码登录（插件自己得到一个账号）
+  // ---------------------------------------------------------------
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_DEVICE_START_PATH,
+    handler: async (req, res) => {
+      const body = await guardPost(req, res)
+      if (body === undefined) return
+      const region = regionOf(body['region'])
+      if (region === undefined) return json(res, 400, { error: 'region must be cn or global' })
+      if (deps.startDeviceLogin === undefined) return json(res, 503, { error: '设备码登录不可用。' })
+      try {
+        const session = await deps.startDeviceLogin(region)
+        return json(res, 200, { ok: true, session })
+      } catch (error: unknown) {
+        return json(res, 502, { error: safeMessage(error) })
+      }
+    },
+  }))
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_DEVICE_CANCEL_PATH,
+    handler: async (req, res) => {
+      const body = await guardPost(req, res)
+      if (body === undefined) return
+      const id = typeof body['id'] === 'string' ? body['id'] : undefined
+      if (id === undefined) return json(res, 400, { error: 'id is required' })
+      deps.cancelDeviceLogin?.(id)
       return json(res, 200, { ok: true })
     },
   }))

@@ -249,6 +249,8 @@ export interface MiniMaxStatusRouteDeps {
   pool?: () => PoolSnapshot
   /** 活凭据自续期状态（mcode 关着时由插件续）。 */
   renewal?: () => Promise<import('./renewal.ts').RenewalStatusView>
+  /** 进行中的设备码登录会话。 */
+  deviceSessions?: () => import('./status-paths.ts').MiniMaxDeviceSessionView[]
   /**
    * 把读到的最新余额回灌给账号池。
    *
@@ -551,6 +553,7 @@ export async function buildMiniMaxStatus(
       ...account?.signin === undefined ? {} : { signin: account.signin },
       ...entry.pool === undefined ? {} : { pool: entry.pool() },
       ...entry.renewal === undefined ? {} : { renewal: await entry.renewal() },
+      ...entry.deviceSessions === undefined ? {} : { deviceSessions: entry.deviceSessions() },
     }
   }))
   const primary = routes[0] ?? {

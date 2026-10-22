@@ -45,9 +45,11 @@ import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
 import { invalidateAccountCache, registerMiniMaxStatusRoute } from './status.ts'
 import { LiveRenewal } from './renewal.ts'
+import { DeviceLoginManager } from './device-login.ts'
 import { looksLikeOurNamespace, unwrapVolatileDeep } from './status-paths.ts'
 import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } from './status.ts'
 import {
+  accountIdOf,
   accountDisplayNameOf,
   accountRouteOf,
   buildTransferFile,
@@ -220,6 +222,33 @@ export const Config: z<MiniMaxConfig> = z.object({
  * @param warn - 诊断出口，便于单测注入。
  * @returns 启用的模型目录（顺序保持配置顺序，去重）。
  */
+/**
+ * 一条主路由的凭据源：**池优先，池空回落到本机登录**。
+ *
+ * 池只含副本（`owned: true`）；一个副本都没有时，这条路由用的就是本机登录的
+ * 活凭据——由 renewal 模块自续，所以"不开 MiniMax Code 也能用"对单账号用户
+ * 同样成立，不需要先有副本。池非空时完全交给池：换号、排空、顺序都在池里。
+ */
+export function createRouteSource(
+  pool: MiniMaxAccountPool,
+  live: MiniMaxCredentialSource,
+  region: MiniMaxRegion,
+  regionLabel: string,
+  baseUrl: string,
+): MiniMaxCredentialSource & { switchAway?(nowMs?: number): boolean } {
+  return {
+    region,
+    regionLabel,
+    baseUrl,
+    token: signal => pool.list().length === 0 ? live.token(signal) : pool.token(signal),
+    invalidate: () => {
+      pool.invalidate()
+      live.invalidate()
+    },
+    switchAway: (nowMs?: number) => pool.switchAway(nowMs),
+  }
+}
+
 export function selectModels(
   configured: readonly string[] | undefined,
   warn: (message: string) => void,
@@ -382,13 +411,13 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
   /**
    * 把"当前已接管的副本"同步进各区域的账号池。
    *
-   * 池里的顺序就是优先级：本机登录在前（由 mcode 续期，最省事），副本按存储顺序
-   * 兜底。这样"本机那个号积分用完了"会自然落到副本上，而用户不需要做任何事。
+   * **池里只有副本**（用户定下的语义）：本机登录的活凭据归 mcode 续期，不进池、
+   * 不参与轮换排序；它由 `routeSource` 在池空时兜底（见下）。顺序就是优先级：
+   * 存储顺序 = 用户的手动顺序，自动换号按顺序取第一个可用的。
    */
   const refreshPools = (): void => {
     const accounts = readAccountsSync()
     for (const [region, pool] of regionPools) {
-      const live = liveAccounts.get(region)
       const copies: PoolAccount[] = accounts
         .filter(account => account.owned && account.region === region)
         .map(account => ({
@@ -398,7 +427,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
           source: accountSourceOf(account),
           route: accountRouteOf(account),
         }))
-      pool.setAccounts(live === undefined ? copies : [live, ...copies])
+      pool.setAccounts(copies)
       pool.setDisabled(config.poolDisabled ?? [])
       if (!restoredRegions.has(region)) {
         restoredRegions.add(region)
@@ -461,10 +490,29 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
   /** 本机登录（每个区域一条），也是镜像"当前账号"的来源。 */
   const liveAuths = new Map<MiniMaxRegion, MiniMaxAuth>()
   const renewals = new Map<MiniMaxRegion, LiveRenewal>()
+  // 设备码登录：插件自己得到一个账号（凭据从出生起只归插件）。
+  const deviceLogins = new DeviceLoginManager(async (region, credential) => {
+    const accounts = await readAccounts()
+    const id = accountIdOf(region, credential.loginEpoch)
+    if (accounts.some(account => account.id === id)) return id
+    await writeAccounts([...accounts, {
+      id,
+      region,
+      label: `设备码登录 ${new Date().toLocaleDateString()}`,
+      loginEpoch: credential.loginEpoch,
+      accessToken: credential.accessToken,
+      refreshToken: credential.refreshToken,
+      expiresAtMs: credential.expiresAtMs,
+      // 设备码登录的凭据只归插件：刷新链从出生起就是插件的。
+      owned: true,
+      createdAtMs: Date.now(),
+    }])
+    reconcileAccounts()
+    return id
+  })
   /** 每个区域的账号池；区域路由的凭据面就是它。 */
   const regionPools = new Map<MiniMaxRegion, MiniMaxAccountPool>()
   /** 每个区域的本机登录候选（池里的第一个）。 */
-  const liveAccounts = new Map<MiniMaxRegion, PoolAccount>()
   /**
    * 已经恢复过"上次选中的账号"的区域。
    *
@@ -507,27 +555,21 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       invalidate: () => auth.invalidate(),
     }
 
-    // 池化：本机登录 + 同区域已接管副本，都是这条路由的候选凭据。
-    // 单账号时池里只有本机登录，行为与以前完全一致。
-    const liveAccount: PoolAccount = {
-      id: LIVE_ACCOUNT_ID,
-      label: '本机登录',
-      source,
-      live: true,
-      route: routeForRegion(region),
-    }
+    // 池只含副本；本机登录的活凭据不进池，由下面的 routeSource 在池空时兜底。
     const pool = new MiniMaxAccountPool(region, { regionLabel: auth.regionLabel, baseUrl })
-    pool.setAccounts([liveAccount])
     regionPools.set(region, pool)
-    liveAccounts.set(region, liveAccount)
 
-    const registration = registerRoute(route, pool, displayNameForRegion(region))
+    // 路由的凭据源：池优先，池空回落到本机登录（工厂导出以便单测）。
+    const routeSource = createRouteSource(pool, source, auth.region, auth.regionLabel, baseUrl)
+
+    const registration = registerRoute(route, routeSource, displayNameForRegion(region))
     if (registration === undefined) continue
 
     liveAuths.set(region, auth)
     renewal.start()
     // 巡检随插件 fiber 拆除：插件停转后不许再有后台定时器碰用户的凭据文件。
     ctx.effect(() => () => { renewal.stop() }, `dsh-connect-minmax: renewal patrol (${region})`)
+    ctx.effect(() => () => { deviceLogins.stopAll() }, 'dsh-connect-minmax: device login timers')
     ctx.logger?.info(
       `dsh-connect-minmax: 已注册 provider "${route}"（${displayNameForRegion(region)}，`
       + `${models.length} 个模型，区域 ${auth.regionLabel}，baseUrl ${baseUrl}）`,
@@ -538,10 +580,11 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       regionLabel: auth.regionLabel,
       baseUrl,
       auth: statusAuthOf(auth),
-      // 积分/签到走同一个 Bearer；用**池**取 token，读到的就是当前生效账号的账。
-      accountToken: signal => pool.token(signal),
+      // 积分/签到走同一个 Bearer；池空时读的是本机登录的账，否则是当前生效副本的账。
+      accountToken: signal => routeSource.token(signal),
       pool: () => pool.describe(),
       renewal: () => renewal.status(),
+      deviceSessions: () => deviceLogins.list(),
       // 余额回灌：读到就把"当前账号还有没有钱"告诉池，下一次选号立刻用上。
       reportCredits: (totalRemaining) => {
         const active = pool.active
@@ -695,6 +738,8 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         if (result.added.length > 0) reconcileAccounts()
         return result
       },
+      startDeviceLogin: region => deviceLogins.start(region),
+      cancelDeviceLogin: id => { deviceLogins.cancel(id) },
       moveAccount: async (region, id, direction) => {
         const pool = regionPools.get(region)
         if (pool === undefined) return false

@@ -33,6 +33,22 @@ export const MINIMAX_SETTINGS_SAVE_PATH = '/plugins/dsh-connect-minmax/__save'
 export const MINIMAX_ACCOUNT_TRANSFER_PATH = '/plugins/dsh-connect-minmax/account/transfer'
 /** 调整池里副本的优先级（自动换号按池顺序选）。 */
 export const MINIMAX_ACCOUNT_MOVE_PATH = '/plugins/dsh-connect-minmax/account/move'
+/** 发起一次设备码登录。 */
+export const MINIMAX_DEVICE_START_PATH = '/plugins/dsh-connect-minmax/account/device/start'
+/** 取消一个设备码登录会话。 */
+export const MINIMAX_DEVICE_CANCEL_PATH = '/plugins/dsh-connect-minmax/account/device/cancel'
+
+/** 一次设备码登录会话（卡片展示用）。 */
+export interface MiniMaxDeviceSessionView {
+  id: string
+  region: 'cn' | 'global'
+  state: 'pending' | 'authorized' | 'denied' | 'expired' | 'failed'
+  userCode?: string
+  verificationUri?: string
+  expiresAtMs: number
+  accountId?: string
+  reason?: string
+}
 
 /** 传输预览里的一条（**不含 token**）。 */
 export interface MiniMaxTransferPreviewEntryView {
@@ -214,6 +230,8 @@ export interface MiniMaxRouteView {
   pool?: MiniMaxPoolView
   /** 活凭据自续期状态；旧版本应答没有这个字段。 */
   renewal?: MiniMaxRenewalView
+  /** 进行中的设备码登录会话。 */
+  deviceSessions?: MiniMaxDeviceSessionView[]
   credits?: MiniMaxCreditsView
   signin?: MiniMaxSigninView
 }
@@ -427,11 +445,13 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     const signin = parseSignin(row['signin'])
     const pool = parsePool(row['pool'])
     const renewal = parseRenewal(row['renewal'])
+    const deviceSessions = parseDeviceSessions(row['deviceSessions'])
     routes.push({
       route,
       ...accountId === undefined ? {} : { accountId },
       ...pool === undefined ? {} : { pool },
     ...renewal === undefined ? {} : { renewal },
+    ...deviceSessions === undefined ? {} : { deviceSessions },
       ...credits === undefined ? {} : { credits },
       ...signin === undefined ? {} : { signin },
       region: row['region'] === 'global' ? 'global' : 'cn',
@@ -589,6 +609,33 @@ function parseRenewal(value: unknown): MiniMaxRenewalView | undefined {
   const expires = finiteNumberOf(row['expiresAtMs'])
   if (expires !== undefined) view.expiresAtMs = expires
   return view
+}
+
+/** 解析设备码登录会话段。 */
+function parseDeviceSessions(value: unknown): MiniMaxDeviceSessionView[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: MiniMaxDeviceSessionView[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const row = item as Record<string, unknown>
+    const id = stringOf(row['id'])
+    const region = row['region'] === 'global' ? 'global' as const : row['region'] === 'cn' ? 'cn' as const : undefined
+    const state = row['state']
+    const expiresAtMs = finiteNumberOf(row['expiresAtMs'])
+    if (id === undefined || region === undefined || expiresAtMs === undefined) continue
+    if (state !== 'pending' && state !== 'authorized' && state !== 'denied' && state !== 'expired' && state !== 'failed') continue
+    const view: MiniMaxDeviceSessionView = { id, region, state, expiresAtMs }
+    const userCode = stringOf(row['userCode'])
+    if (userCode !== undefined) view.userCode = userCode
+    const uri = stringOf(row['verificationUri'])
+    if (uri !== undefined) view.verificationUri = uri
+    const accountId = stringOf(row['accountId'])
+    if (accountId !== undefined) view.accountId = accountId
+    const reason = stringOf(row['reason'])
+    if (reason !== undefined) view.reason = reason
+    out.push(view)
+  }
+  return out
 }
 
 /** 解析积分概览：任何形状不符就整段丢弃（宁可不显示，也不显示半个数字）。 */

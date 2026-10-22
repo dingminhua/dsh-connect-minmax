@@ -3,7 +3,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import { MiniMaxAdapter, PROVIDER_DISPLAY_NAME } from '../src/adapter.ts'
 import { MINIMAX_MODELS, ROUTE, findModelSpec, regionBaseUrl } from '../src/catalog.ts'
-import { apply, Config, effectiveBaseUrl, MINIMAX_REASONING_EFFORTS, normalizeRegions, projectModel, resolveReasoningEffort, selectModels } from '../src/index.ts'
+import { apply, Config, createRouteSource, effectiveBaseUrl, MINIMAX_REASONING_EFFORTS, normalizeRegions, projectModel, resolveReasoningEffort, selectModels } from '../src/index.ts'
+import { MiniMaxAccountPool } from '../src/pool.ts'
 import { PLUGIN_VERSION } from '../src/version.ts'
 
 /**
@@ -259,6 +260,53 @@ describe('apply', () => {
     apply(result.ctx, {})
     const llm = (result.ctx as unknown as { llm: Record<string, unknown> }).llm
     expect(llm.registerConfigurableProviders).toBeUndefined()
+  })
+})
+
+/** 最小假凭据源：记录 token 被谁要过。 */
+function fakeSource(tokenValue: string) {
+  const calls: number[] = []
+  return {
+    calls,
+    source: {
+      region: 'cn' as const,
+      regionLabel: '国内版',
+      baseUrl: 'https://example.invalid',
+      token: async () => { calls.push(1); return tokenValue },
+      invalidate: () => { calls.push(0) },
+    },
+  }
+}
+
+describe('createRouteSource（池空回落到本机登录）', () => {
+  it('池为空：token 来自本机登录（活凭据由 renewal 自续）', async () => {
+    const pool = new MiniMaxAccountPool('cn', { regionLabel: '国内版', baseUrl: 'https://example.invalid' })
+    pool.setAccounts([])
+    const live = fakeSource('live-token')
+    const route = createRouteSource(pool, live.source, 'cn', '国内版', 'https://example.invalid')
+    expect(await route.token()).toBe('live-token')
+    expect(live.calls).toHaveLength(1)
+  })
+
+  it('池有副本：token 只走池，本机登录不被碰', async () => {
+    const pool = new MiniMaxAccountPool('cn', { regionLabel: '国内版', baseUrl: 'https://example.invalid' })
+    const copy = fakeSource('copy-token')
+    pool.setAccounts([{ id: 'cn-copy01', label: '副本', live: false, source: copy.source }])
+    const live = fakeSource('live-token')
+    const route = createRouteSource(pool, live.source, 'cn', '国内版', 'https://example.invalid')
+    expect(await route.token()).toBe('copy-token')
+    expect(live.calls).toHaveLength(0)
+  })
+
+  it('invalidate 同时打到池与本机登录', () => {
+    const pool = new MiniMaxAccountPool('cn', { regionLabel: '国内版', baseUrl: 'https://example.invalid' })
+    const copy = fakeSource('c')
+    pool.setAccounts([{ id: 'cn-copy01', label: '副本', live: false, source: copy.source }])
+    const live = fakeSource('l')
+    const route = createRouteSource(pool, live.source, 'cn', '国内版', 'https://example.invalid')
+    route.invalidate()
+    expect(copy.calls).toContain(0)
+    expect(live.calls).toContain(0)
   })
 })
 
