@@ -25,9 +25,16 @@ The model picker then shows the **MiniMax (local sign-in)** group. Restart Harne
 2. **Local credential file (read-only fallback)** — when MiniMax Code is not running, the plugin reads
    `~/.minimax/auth/<env>/<region>/mcode-public/auth.json` and only uses a still-valid token.
 
-The plugin **never writes** to `~/.minimax`, never refreshes the one-time refresh token, and never asks
-MiniMax Code to sign the user out. A `401` triggers one re-lease plus one retry; a second failure asks the
-user to sign in again in MiniMax Code.
+**Self-renewal (default on, `selfRenewal: false` to disable)**: with MiniMax Code closed nothing else would
+renew the 1-hour access token, so the plugin performs the same `refresh_token` grant the official client
+does — under the client's own on-disk protocol: its `auth.lock.lock` directory lock (`mkdir` acquisition,
+30 s stale reclaim), re-read inside the lock to adopt a newer rotation, atomic temp-file + rename writes,
+and `auth-state.json` generation bumped to `max(state, credential) + 1` (the client refuses a pair whose
+generations disagree). The rotated refresh token is single-use, so the new pair is written back to
+`~/.minimax`; keeping it only in the plugin would log MiniMax Code out on its next renewal. Failures never
+throw: `invalid_grant` is the one fatal case (sign in again in MiniMax Code to recover); everything else
+retries after a 5-minute backoff. The card shows the live renewal state. A `401` still triggers one re-lease
+plus one retry first.
 
 ## Models and thinking
 
@@ -69,10 +76,12 @@ The card on the plugin page follows the same shape as its siblings (qoder / work
   source, when credits were read, catalog and enabled model counts, account pool, last error. This page
   has no control that changes settings.
 
-The card can write back the `models` / `regions` / `longContext` / `modelContextWindows` / `modelImages`
-config fields and **verifies each write
+The card can write back the `models` / `regions` / `longContext` / `modelContextWindows` / `modelImages` /
+`modelThinkingOff` / `reasoningEffort` / `poolDisabled` config fields and **verifies each write
 by reading it back**: the settings surface may report success without the value landing, and without that
-check the card would tick a checkbox while the config stayed unchanged. When the host exposes no settings
+check the card would tick a checkbox while the config stayed unchanged. The authoritative write goes
+through the host-side `POST /plugins/dsh-connect-minmax/__save` (`settings.mutate` in the host process);
+the browser-side `ConfigForm.set` only mirrors it. When the host exposes no settings
 surface, the whole card degrades to read-only and says so.
 
 The per-model **image** toggle is deliberately **asymmetric**: turning off a modality upstream supports is
@@ -117,27 +126,46 @@ would become six upstream calls per 10 seconds.
 qoder). MiniMax's brand marks are deliberately not used: this plugin reads your own local
 sign-in and does not impersonate the official client.
 
-## Account pool (0.6.0)
+## Account pool (0.7.0)
 
 A region can hold several accounts at once. When the active account runs out of credits, the
 request **switches accounts inside the same call** and continues — you get a normal reply instead
 of an "insufficient balance" error.
 
-- Candidates = the local login plus every **taken-over** copy of that region.
+**How an account gets into the pool** — two routes, both give the plugin its own refresh chain
+(`owned: true`):
+
+1. **Device-code login (recommended)**: the "Add account" button on the card. The plugin runs
+   `/oauth2/device/code` itself (PKCE S256); you enter the code once in a browser, and the new
+   credential belongs to the plugin **from birth** — its own refresh chain, self-renewing, stored in
+   the plugin's account library (`$DSH_HOME/.minimax-accounts.json`). It never reads or writes
+   `~/.minimax` and does not interfere with a login MiniMax Code has in progress.
+2. **Takeover after switching accounts in MiniMax Code**: the plugin mirrors the local sign-in as a
+   follow-state copy (`owned: false`, read-only — refreshing it would cost the client an
+   `invalid_grant`); when you switch to another account in MiniMax Code, the old copy's refresh
+   chain is taken over by the plugin.
+
+Pool rules:
+
+- **The pool contains copies only.** The live local-login credential stays out of the pool (its
+  renewal is §"Self-renewal" above); when there are no copies at all, the main route simply serves
+  the live credential — single-account users need to do nothing.
+- **Ordering is purely manual**: ↑↓ on the card rewrites the storage order, and auto-switching takes
+  the first usable account in that order.
+- The checkbox is a **participation switch** (persisted to `poolDisabled`): an unchecked account
+  takes no part in rotation, check-in or testing.
 - **Proactive**: whatever balance the status route reads is fed back into the pool, so an empty
   account is skipped before a request is even sent.
 - **Reactive**: on a quota-class error, and only while **nothing has been streamed yet**, the call
   switches account and retries once. Content already streamed cannot be retracted, so that case is
   not retried.
-- The card's account page shows an **Account pool** block: balance, "in use" / "out of credits"
-  markers and a "Use this account" button. A manual choice is persisted in `activeByRegion` and
-  survives a restart.
-- The block is hidden when there is only one account — that is not a pool.
-
-**How an account gets into the pool**: it was logged into in MiniMax Code, the plugin mirrored it as
-a copy, and the plugin now owns its refresh chain. **Logging in from the plugin itself ("Add
-account" on the card) is not implemented yet** — the device-code flow is feasible (`/oauth2/device/code`
-returns a user_code), but that is a separate feature.
+- "Use this account" persists the manual choice in `activeByRegion`; it survives a restart.
+- **Check in all accounts**: one button claims today for the local login plus every pool account,
+  one by one (status first, then claim; a device-level "already claimed" stops the batch).
+- Copies can be **exported/imported** to move them to another machine (the export file contains
+  credentials — treat it like a password).
+- The pool table is hidden when there is only one account — that is not a pool; the transfer section
+  and "Add account" are always shown.
 
 ## Configuration
 
@@ -152,6 +180,9 @@ returns a user_code), but that is a separate feature.
 | `reasoningEffort` | `medium` | thinking level used when the session names none. **Provider-wide**: pi-ai's model-level description carries only the *set* of selectable efforts, never a per-model default, so a per-model default cannot be expressed plugin-side. `off` is **not offered** — `MiniMax-M3.1-Flash` forces thinking, and defaulting to `off` would make the harness fail the moment it is selected |
 | `modelImages` | `{}` | **per-model** image-input toggle (id → send images or not). Only turning off a supported modality takes effect; enabling one upstream does not support is ignored with a warning |
 | `modelContextWindows` | `{}` | **per-model** context tier (id → window), overriding `longContext`. Only tiers the model actually offers are accepted; anything else is ignored with a warning — a window upstream does not honour would make the harness compress context against the wrong number |
+| `modelThinkingOff` | `{}` | **per-model** "thinking off" default (id → start with thinking disabled). Only models that allow disabling thinking accept it; a forced-thinking model (`M3.1-Flash`) ignores it with a warning |
+| `selfRenewal` | `true` | when MiniMax Code is closed, the plugin renews the live credential itself (writing back to `~/.minimax` under the official client's lock + generation protocol, see [design §2.1](docs/design.md)). With it off, the local sign-in depends on MiniMax Code staying open |
+| `poolDisabled` | `[]` | account ids in the pool that do **not** take part in rotation, check-in or testing (the card's checkbox persists here). Empty = everyone participates |
 
 ## Diagnostics
 

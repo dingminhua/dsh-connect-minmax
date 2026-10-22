@@ -10,6 +10,8 @@
  * 用法：
  *   pnpm build && node scripts/e2e-actions.mjs
  *   node scripts/e2e-actions.mjs --no-claim     # 只读，不测签到领取
+ *   node scripts/e2e-actions.mjs --device       # 真的发起一次设备码登录（会在
+ *                                               #   account.minimax.cn 创建一个待授权会话）
  *
  * 注意：`signin/claim` 会**真的改变账户状态**（领当天的积分）。默认跳过，
  * 只有显式带 `--claim` 才发。
@@ -22,6 +24,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const { apply } = await import(join(here, '..', 'lib', 'index.js'))
 
 const wantClaim = process.argv.includes('--claim')
+const wantDevice = process.argv.includes('--device')
 
 // ---------------------------------------------------------------------------
 // 真 http server + 最小 webServer 桩
@@ -108,6 +111,15 @@ check(
   `totalRemaining=${cn?.credits?.balance?.totalRemaining} lots=${cn?.credits?.lotCount} err=${JSON.stringify(cn?.credits?.error ?? cn?.signin?.error)}`,
 )
 check(
+  '投影出自续期状态',
+  cn?.renewal?.state === 'enabled' || cn?.renewal?.state === 'off' || cn?.renewal?.state === 'paused' || cn?.renewal?.state === 'fatal',
+  `state=${cn?.renewal?.state} reason=${cn?.renewal?.reason ?? ''}`,
+)
+check(
+  '投影出设备码会话列表（数组，哪怕为空）',
+  Array.isArray(cn?.deviceSessions),
+)
+check(
   '投影出签到进度',
   Array.isArray(cn?.signin?.days) && cn.signin.days.length > 0,
   `格子=${cn?.signin?.days?.map(day => `${day.dayNo}:${day.status}${day.isToday ? '*' : ''}`).join(' ')} 今天可领=${cn?.signin?.claimableToday}`,
@@ -158,9 +170,10 @@ const selectBadId = await post('/plugins/dsh-connect-minmax/account/select', { i
 check('池里没有的 id 回 404（不假装切成功）', selectBadId.status === 404)
 const selectNoId = await post('/plugins/dsh-connect-minmax/account/select', { region: 'cn' })
 check('缺 id 回 400', selectNoId.status === 400)
-// 切到当前账号本身是幂等的：写一次再写一次都该成功，且不该丢账号列表。
+// 0.7.0 起池里只有副本：live 不是池成员，select 它就该 404——本机登录由
+// routeSource 在池空时自动兜底，不经过手动切换。
 const selectLive = await post('/plugins/dsh-connect-minmax/account/select', { id: 'live', region: 'cn' })
-check('切到本机登录成功', selectLive.status === 200 && selectLive.body.active === 'live', JSON.stringify(selectLive.body))
+check('select live 回 404（活凭据不在池里，切换只针对副本）', selectLive.status === 404, JSON.stringify(selectLive.body))
 
 console.log('\n== POST /account/refresh ==')
 const refreshOk = await post('/plugins/dsh-connect-minmax/account/refresh', { region: 'cn' })
@@ -179,8 +192,31 @@ check('空勾选导出回 400（不是"全部"）', noIds.status === 400)
 console.log('\n== POST /account/move ==')
 const moveBad = await post('/plugins/dsh-connect-minmax/account/move', { region: 'cn', id: 'nope', direction: 'up' })
 check('池里没有的 id 回 404', moveBad.status === 404)
-const moveDir = await post('/plugins/dsh-connect-minmax/account/move', { region: 'cn', id: 'live', direction: 'sideways' })
+const moveDir = await post('/plugins/dsh-connect-minmax/account/move', { region: 'cn', id: 'cn-does-not-exist', direction: 'sideways' })
 check('非法 direction 回 400', moveDir.status === 400)
+
+console.log('\n== POST /account/device/* ==')
+const deviceBadRegion = await post('/plugins/dsh-connect-minmax/account/device/start', { region: 'mars' })
+check('非法 region 回 400', deviceBadRegion.status === 400)
+const deviceCancelNoId = await post('/plugins/dsh-connect-minmax/account/device/cancel', {})
+check('取消缺 id 回 400', deviceCancelNoId.status === 400)
+const deviceCancelUnknown = await post('/plugins/dsh-connect-minmax/account/device/cancel', { id: 'no-such-session' })
+check('取消未知会话回 200（幂等，不假装出错）', deviceCancelUnknown.status === 200 && deviceCancelUnknown.body.ok === true)
+if (!wantDevice) {
+  console.log('  – 跳过真实发起（加 --device 才会在 account.minimax.cn 创建待授权会话）')
+} else {
+  const deviceStart = await post('/plugins/dsh-connect-minmax/account/device/start', { region: 'cn' })
+  const session = deviceStart.body.session
+  check('发起成功：拿到 user_code 与验证链接', deviceStart.status === 200
+    && typeof session?.userCode === 'string' && typeof session?.verificationUri === 'string',
+    `code=${session?.userCode} uri=${session?.verificationUri}`)
+  if (session?.id !== undefined) {
+    await post('/plugins/dsh-connect-minmax/account/device/cancel', { id: session.id })
+    const statusAfter = await get('/plugins/dsh-connect-minmax/status')
+    const cnAfter = statusAfter.body.routes?.find(route => route.route === 'minimax')
+    check('取消后会话消失', !(cnAfter?.deviceSessions ?? []).some(item => item.id === session.id))
+  }
+}
 
 console.log('\n== POST /signin/claim ==')
 if (!wantClaim) {

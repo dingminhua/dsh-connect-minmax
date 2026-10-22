@@ -2,7 +2,7 @@
   "name": "@dmh2002/dsh-connect-minmax",
   "displayName": "DSH Connect MiniMax",
   "description": "把本机已登录的 MiniMax（MiniMax Code / mcode）账号接入 DeepSeek Harness：无需 API Key，读取本机登录态并注册 minimax（国内版）与 minimax-global（国际版）两条模型供应商路由，提供设置卡片展示两个区域的登录来源与模型目录。",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "dingminhua",
   "copyright": "Copyright (c) 2026 LaoDing",
   "license": "MIT",

@@ -1,8 +1,9 @@
 # dsh-connect-minmax 设计说明（v1）
 
 把**本机已登录的 MiniMax（MiniMax Code / mcode）账号**接入 DeepSeek Harness，注册一个名为
-`minimax` 的模型供应商路由。**不提供任何 API Key 输入**：凭据只从本机登录态读取，
-优先走 mcode 的 Auth Lease Broker，允许中途刷新，且**绝不写用户凭据文件**。
+`minimax` 的模型供应商路由。**不提供任何 API Key 输入**：凭据从本机登录态读取，
+优先走 mcode 的 Auth Lease Broker；mcode 关闭时由插件**自续活凭据**（见 §2.1，
+按官方客户端的锁/代际协议写回 `~/.minimax`，这是"不开 MiniMax Code 也能用"的代价）。
 
 ## 1. 已实测确认的事实（证据见 docs/research/upstream.md）
 
@@ -22,7 +23,7 @@
 
 ## 2. 凭据获取（核心设计）
 
-**只读，不写凭据文件。** 两条通路，按优先级：
+读凭据有两条通路，按优先级；写凭据只有一条路（§2.1 的自续期），且严格按官方协议。
 
 1. **Auth Lease Broker（首选）**：mcode 运行时在
    `~/.minimax/run/mcode-auth-lease-v1.sock`（Windows 命名管道）提供租约服务，
@@ -34,11 +35,31 @@
    - **禁止主动发 `unauthorized`**：broker 刷新失败时会直接登出用户（实测已踩）。
      401 时只做「重新 lease 取新 token + 重试一次」，仍失败则以 `AUTH` 失败上报并提示重新登录。
    - 由 mcode 自己负责刷新 → 插件零维护、零副作用。
-2. **本地凭据文件（兜底，只读）**：`~/.minimax/auth/<buildEnv>/<region>/mcode-public/auth.json`
+2. **本地凭据文件（兜底）**：`~/.minimax/auth/<buildEnv>/<region>/mcode-public/auth.json`
    （`records` 第一条的 `accessToken` / `expiresAtMs` / `generation`），配合 `auth-state.json`
-   的 `region`/`status`。**不刷新、不回写**（refreshToken 严格一次性轮换，乱刷会毁掉用户登录）。
+   的 `region`/`status`。mcode 关着时由 §2.1 的自续期负责刷新与回写。
 
 token 缓存策略：内存缓存 + `expiresAtMs - 60s` 提前失效；401 时 `invalidate()` 后重新取。
+
+### 2.1 活凭据自续期（`src/renewal.ts`，配置 `selfRenewal`，默认开）
+
+access token 只活 1 小时，mcode 之外没有任何东西会续它。「不开 MiniMax Code 也能用」
+就要求插件自己执行 refresh_token grant。refreshToken **一次性轮换**：插件刷一次，
+mcode 文件里的旧 RT 立刻作废——所以新的一对**必须写回原文件**，否则用户下次打开
+MiniMax Code 会拿死 RT 去续、登录被打断。写回按官方客户端的协议（四步缺一即事故，
+与 VICqiufeeng/dsh-minimax-connect 的实测结论一致）：
+
+1. **抢官方同款磁盘锁**：`auth.lock.lock` 目录、`mkdir` 原子抢占、30s 陈旧回收
+   （= 客户端 `proper-lockfile` 的 staleMs）。两个进程抢同一个一次性 RT 时第二个
+   被当重放、整族作废（实测代价 = 重新登录）。锁外先做新鲜度预检，巡检不空抢锁。
+2. **锁内重读**：等锁期间别人可能已轮换，采纳更新的那对而不是花掉死 RT。
+3. **原子写回**：临时文件 + rename。
+4. **代际同步**：`auth-state.json.generation = max(state, credential) + 1` 一起写；
+   客户端要求两文件代际相等，只用凭据计数器会写回更低的值、把账号锁死。
+
+节奏：提前 5 分钟续 + 60s 巡检 + 被拒退避 5 分钟；失败一律 `{ok:false,reason,fatal?}`
+不抛异常，`fatal` 只标 `invalid_grant`（RT 没了，只有重新登录能救）；状态经
+status 路由进卡片（`renewal.state`）。巡检与设备码登录定时器都随 fiber 拆除停转。
 
 ## 3. 技术路线：pi-ai + `PiAiAdapter`（路线 B）
 

@@ -584,7 +584,8 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       accountToken: signal => routeSource.token(signal),
       pool: () => pool.describe(),
       renewal: () => renewal.status(),
-      deviceSessions: () => deviceLogins.list(),
+      // 只报本区域的会话：cn 页不该看见 global 的 user_code。
+      deviceSessions: () => deviceLogins.list().filter(session => session.region === region),
       // 余额回灌：读到就把"当前账号还有没有钱"告诉池，下一次选号立刻用上。
       reportCredits: (totalRemaining) => {
         const active = pool.active
