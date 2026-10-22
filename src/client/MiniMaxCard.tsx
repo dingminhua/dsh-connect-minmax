@@ -47,8 +47,6 @@ import {
   MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_CARD_KEYS,
-  MINIMAX_DISPLAY_NAME,
-  MINIMAX_GITHUB_URL,
   MINIMAX_MODEL_TEST_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
   MINIMAX_STATUS_PATH,
@@ -1590,20 +1588,6 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
           <p className="dsm-minimax-error">{translate('row.unreachable')}{error === '' ? '' : `: ${error}`}</p>
         )}
 
-        {/* 操作行 */}
-        <div className="dsm-minimax-actions">
-          <button
-            type="button"
-            className="dsm-minimax-btn dsm-minimax-btn-outline"
-            onClick={() => { void load() }}
-            disabled={busy}
-          >
-            {busy ? translate('row.refreshing') : translate('row.refresh')}
-          </button>
-          <a className="dsm-minimax-updated" href={MINIMAX_GITHUB_URL} target="_blank" rel="noreferrer noopener">
-            {MINIMAX_DISPLAY_NAME}
-          </a>
-        </div>
       </div>
     </div>
   )

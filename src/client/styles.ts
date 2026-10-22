@@ -153,10 +153,6 @@ export const MINIMAX_CARD_CSS = `
 }
 
 /* ---- 操作行 ---- */
-.dsm-minimax-actions{display:flex;align-items:center;gap:10px}
-.dsm-minimax-updated{
-  color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;line-height:16px;
-}
 
 /* ---- 区域 tab：每个 tab 是一个独立供应商 ---- */
 .dsm-minimax-tabs{

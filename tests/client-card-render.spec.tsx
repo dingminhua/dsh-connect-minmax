@@ -689,3 +689,15 @@ describe('模型行文案', () => {
     expect(zh['models.imageNo']).toBe('无图片')
   })
 })
+
+describe('卡片底部不再有重复的操作行', () => {
+  it('最外层底部不渲染「刷新 + 仓库链接」那一行', async () => {
+    // 底部要留的是模型页自己的「放弃修改 / 保存」（草稿式交互）。
+    // 卡片最外层再挂一行「刷新 + MiniMax（本机登录）」既重复又和草稿式交互打架
+    // （那行的刷新只重拉缓存，用户会以为保存了）。
+    mockFetch(payload())
+    await mount(writableScope())
+    expect(container.querySelector('.dsm-minimax-actions')).toBeNull()
+    expect(container.innerHTML).not.toContain('row.refresh')
+  })
+})
