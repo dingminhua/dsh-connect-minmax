@@ -17,6 +17,17 @@ interface ConfigFormsFace {
   get(ns: string): MiniMaxSettingsScope | undefined
 }
 
+/**
+ * 兜底候选 id。
+ *
+ * 只作为"镜像里还没带 value"时的后备；正常路径是按配置字段认，那样部署方
+ * 把安装行改成什么名字都不会认错。
+ */
+const NAMESPACE_CANDIDATES = [
+  'include:dsh-connect-minmax',
+  'dsh-connect-minmax',
+] as const
+
 /** 我们的配置里独有的字段，用来认出"哪个命名空间是这个插件"。 */
 function looksLikeOurNamespace(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -45,9 +56,16 @@ export function createLazySettingsScope(ctx: {
   const resolve = (): MiniMaxSettingsScope | undefined => {
     try {
       const namespaces = forms.describe().getSnapshot().view?.namespaces ?? []
-      const served = namespaces.find(entry => looksLikeOurNamespace(entry.value))
-      if (served === undefined) return undefined
-      return forms.get(served.ns)
+      // 先按配置字段认（唯一可靠）；镜像还没给出 value 时退回到候选 id。
+      const byShape = namespaces.find(entry => looksLikeOurNamespace(entry.value))
+      if (byShape !== undefined) return forms.get(byShape.ns)
+      // 本宿主把 Loader 条目命名成 `include:<短名>`（实测 profile 里全是这种形状），
+      // 所以裸包名永远匹配不上——这是原来写入静默失败的机制。
+      for (const candidate of NAMESPACE_CANDIDATES) {
+        if (!namespaces.some(entry => entry.ns === candidate)) continue
+        return forms.get(candidate)
+      }
+      return undefined
     } catch {
       return undefined
     }

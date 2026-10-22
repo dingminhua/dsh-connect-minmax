@@ -96,3 +96,35 @@ describe('createLazySettingsScope', () => {
     await expect(scope?.set('models', [])).resolves.toBe(false)
   })
 })
+
+describe('命名空间兜底', () => {
+  it('镜像 value 还没来时，用 include:<短名> 找到（本宿主的真实命名法）', () => {
+    // 宿主里条目 id 实测全是 `include:<moduleName 短名>` 形状；裸包名匹配不上，
+    // 这正是原来"能点但一条也存不进去"的机制。
+    const forms = {
+      describe: () => ({
+        getSnapshot: () => ({ view: { namespaces: [{ ns: 'include:dsh-connect-minmax' }, { ns: 'include:settings' }] } }),
+        subscribe: () => () => undefined,
+      }),
+      get: (ns: string) => (ns === 'include:dsh-connect-minmax'
+        ? { getSnapshot: () => ({ value: OUR_VALUE }), set: async () => true }
+        : undefined),
+    }
+    const scope = createLazySettingsScope(ctxWith(forms))
+    expect(scope).toBeDefined()
+    expect(scope?.getSnapshot()).toMatchObject({ value: expect.anything() as unknown })
+  })
+
+  it('命名空间完全不存在时返回 undefined 的作用域行为（写入 false）', async () => {
+    const forms = {
+      describe: () => ({
+        getSnapshot: () => ({ view: { namespaces: [{ ns: 'include:something-else' }] } }),
+        subscribe: () => () => undefined,
+      }),
+      get: () => undefined,
+    }
+    const scope = createLazySettingsScope(ctxWith(forms))
+    await expect(scope?.set('models', [])).resolves.toBe(false)
+    expect(scope?.getSnapshot()).toEqual({})
+  })
+})
