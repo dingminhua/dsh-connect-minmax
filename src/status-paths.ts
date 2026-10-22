@@ -29,6 +29,19 @@ export const MINIMAX_ACCOUNT_SELECT_PATH = '/plugins/dsh-connect-minmax/account/
 export const MINIMAX_ACCOUNT_REFRESH_PATH = '/plugins/dsh-connect-minmax/account/refresh'
 /** 宿主侧保存端点：真写入在宿主进程里做（workbuddy 同款）。 */
 export const MINIMAX_SETTINGS_SAVE_PATH = '/plugins/dsh-connect-minmax/__save'
+/** 账号传输端点：导出 / 预览 / 导入。 */
+export const MINIMAX_ACCOUNT_TRANSFER_PATH = '/plugins/dsh-connect-minmax/account/transfer'
+/** 调整池里副本的优先级（自动换号按池顺序选）。 */
+export const MINIMAX_ACCOUNT_MOVE_PATH = '/plugins/dsh-connect-minmax/account/move'
+
+/** 传输预览里的一条（**不含 token**）。 */
+export interface MiniMaxTransferPreviewEntryView {
+  id: string
+  region: 'cn' | 'global'
+  label: string
+  duplicate: boolean
+  hasToken: boolean
+}
 
 /** 本插件注册的 LLM 路由名。 */
 export const MINIMAX_ROUTE = 'minimax'
@@ -175,6 +188,12 @@ export interface MiniMaxPoolEntryView {
   balance?: number
   /** 是否被判定为积分耗尽（短时间内不会再被选中）。 */
   drained: boolean
+  /** 这个账号对应的路由名（测试/删除按钮要按它打）。 */
+  route?: string
+  /** 在池里的位次（1 起）；自动换号按这个顺序选。 */
+  rank: number
+  /** 是否参与自动换号/批量动作。 */
+  participates: boolean
 }
 
 /** 一个区域的账号池快照。 */
@@ -534,6 +553,9 @@ function parsePool(value: unknown): MiniMaxPoolView | undefined {
       active: entry['active'] === true,
       ...balance === undefined ? {} : { balance },
       drained: finiteNumberOf(entry['drainedUntilMs']) !== undefined,
+      ...(() => { const r = stringOf(entry['route']); return r === undefined ? {} : { route: r } })(),
+      rank: finiteNumberOf(entry['rank']) ?? accounts.length + 1,
+      participates: entry['participates'] !== false,
     })
   }
   if (accounts.length === 0) return undefined

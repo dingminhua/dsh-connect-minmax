@@ -44,8 +44,10 @@ import {
   expiryBucketOf,
   formatContextWindow,
   MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_MOVE_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
+  MINIMAX_ACCOUNT_TRANSFER_PATH,
   MINIMAX_CARD_KEYS,
   MINIMAX_MODEL_TEST_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
@@ -57,9 +59,12 @@ import type {
   MiniMaxLoginState,
   MiniMaxLoginView,
   MiniMaxModelView,
+  MiniMaxPoolEntryView,
+  MiniMaxPoolView,
   MiniMaxRouteView,
   MiniMaxSigninView,
   MiniMaxStatusView,
+  MiniMaxTransferPreviewEntryView,
 } from '../status-paths.ts'
 import { MINIMAX_CARD_CSS } from './styles.ts'
 import type { MiniMaxSettingsScope } from './settings.ts'
@@ -525,6 +530,32 @@ export async function fetchMiniMaxStatus(signal?: AbortSignal): Promise<MiniMaxS
  * 动作接口都是宿主侧的 loopback-only POST；这里只负责"发出去 + 把话带回来"，
  * 失败一律变成一行提示，不抛异常（卡片不该因为一次点击失败而白屏）。
  */
+/** 同 postAction，但把应答 body 原样带回来（传输/批量动作要读 results）。 */
+async function postActionJson(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean, message: string, body: Record<string, unknown> }> {
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body),
+    })
+    let payload: unknown
+    try {
+      payload = await response.json()
+    } catch {
+      return { ok: false, message: `HTTP ${response.status}`, body: {} }
+    }
+    const record = (typeof payload === 'object' && payload !== null && !Array.isArray(payload))
+      ? payload as Record<string, unknown>
+      : {}
+    return { ok: response.ok && record['ok'] !== false, message: typeof record['error'] === 'string' ? record['error'] : '', body: record }
+  } catch (caught: unknown) {
+    return { ok: false, message: caught instanceof Error ? caught.message : String(caught), body: {} }
+  }
+}
+
 async function postAction(
   path: string,
   body: Record<string, unknown>,
@@ -646,6 +677,356 @@ function PanelTabs(props: {
   )
 }
 
+/**
+ * 账号池表格：勾选、优先级、积分、状态、签到、批量动作、导入导出。
+ *
+ * 布局照 workbuddy 的池表格（账号 / 积分 / 状态 / 签到 四列 + 行尾动作），
+ * 但每一格都只放**真读到的**数据：积分来自 get_membership_info，签到来自
+ * signin/status，"测得 x 前"来自状态里的 checkedAt。没有的就不画，不编。
+ *
+ * 表格与批量动作只在真"池"（>1 个账号）时画；传输区（导入/导出）永远画——
+ * 单账号也有"把这个号搬到另一台机器"的需求。
+ */
+function PoolTable(props: {
+  pool: MiniMaxPoolView
+  routes: MiniMaxRouteView[]
+  region: string
+  nowMs: number
+  busy: boolean
+  t: MiniMaxTranslate
+  onSelectAccount(id: string): void
+  onDelete(route: MiniMaxRouteView): void
+  onTest(route: string): void
+  onClaim(ids: readonly string[]): void
+  onMove(id: string, direction: 'up' | 'down'): void
+}): ReactElement {
+  const { pool, routes, region, nowMs, busy, t, onSelectAccount, onDelete, onTest, onClaim, onMove } = props
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(pool.accounts.map(entry => entry.id)))
+  const [transfer, setTransfer] = useState<{
+    phase: 'idle' | 'preview' | 'busy'
+    preview?: MiniMaxTransferPreviewEntryView[]
+    raw?: string
+    picked?: Set<string>
+    note?: string
+  }>({ phase: 'idle' })
+  const fileRef = useRef<HTMLInputElement>(null)
+  const isPool = pool.accounts.length > 1
+
+  const routeOf = (entry: MiniMaxPoolEntryView): MiniMaxRouteView | undefined =>
+    routes.find(route => (entry.live ? !isCopyRoute(route) : route.accountId === entry.id))
+
+  const toggle = (id: string): void => {
+    setSelected(previous => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const selectedIds = pool.accounts.filter(entry => selected.has(entry.id)).map(entry => entry.id)
+
+  const doExport = async (): Promise<void> => {
+    setTransfer(state => ({ ...state, phase: 'busy' }))
+    const outcome = await postActionJson(MINIMAX_ACCOUNT_TRANSFER_PATH, { action: 'export', accountIds: selectedIds })
+    if (!outcome.ok) {
+      setTransfer({ phase: 'idle', note: outcome.message })
+      return
+    }
+    // 下载：卡片在设置页 iframe 里，a[download] 同源下载是沙箱内最可靠的方式。
+    const blob = new Blob([JSON.stringify(outcome.body['file'], undefined, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `minimax-accounts-${region}-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    setTransfer({ phase: 'idle', note: t('pool.exportHint') })
+  }
+
+  const doPreview = async (file: File): Promise<void> => {
+    const raw = await file.text()
+    setTransfer(state => ({ ...state, phase: 'busy' }))
+    const outcome = await postActionJson(MINIMAX_ACCOUNT_TRANSFER_PATH, { action: 'preview', file: raw })
+    if (!outcome.ok || !Array.isArray(outcome.body['preview'])) {
+      setTransfer({ phase: 'idle', note: t('pool.transferBadFile') })
+      return
+    }
+    const preview = outcome.body['preview'] as MiniMaxTransferPreviewEntryView[]
+    setTransfer({
+      phase: 'preview',
+      raw,
+      preview,
+      picked: new Set(preview.filter(entry => !entry.duplicate && entry.hasToken).map(entry => entry.id)),
+    })
+  }
+
+  const doImport = async (): Promise<void> => {
+    if (transfer.raw === undefined || transfer.picked === undefined) return
+    setTransfer(state => ({ ...state, phase: 'busy' }))
+    const outcome = await postActionJson(MINIMAX_ACCOUNT_TRANSFER_PATH, {
+      action: 'import',
+      file: transfer.raw,
+      accountIds: [...transfer.picked],
+    })
+    const added = Array.isArray(outcome.body['added']) ? (outcome.body['added'] as unknown[]).length : 0
+    const skipped = Array.isArray(outcome.body['skipped']) ? (outcome.body['skipped'] as unknown[]).length : 0
+    setTransfer({ phase: 'idle', note: outcome.ok ? t('pool.imported', { added, skipped }) : outcome.message })
+  }
+
+  return (
+    <div className="dsm-minimax-pool">
+      {isPool && (
+        <>
+          <div className="dsm-minimax-panel-head">
+            <div>
+              <div className="dsm-minimax-panel-title">{t('pool.title')}</div>
+              <div className="dsm-minimax-hint">{t('pool.hint')}</div>
+            </div>
+            <div className="dsm-minimax-panel-actions">
+              <span className="dsm-minimax-hint">
+                {t('pool.selected', { done: selectedIds.length, total: pool.accounts.length })}
+              </span>
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-ghost"
+                disabled={busy}
+                onClick={() => { setSelected(new Set(pool.accounts.map(entry => entry.id))) }}
+              >
+                {t('pool.selectAll')}
+              </button>
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-ghost"
+                disabled={busy}
+                onClick={() => { setSelected(new Set()) }}
+              >
+                {t('pool.selectNone')}
+              </button>
+            </div>
+          </div>
+
+          <div className="dsm-minimax-pool-actions">
+            <button
+              type="button"
+              className="dsm-minimax-btn dsm-minimax-btn-primary"
+              disabled={busy || selectedIds.length === 0}
+              onClick={() => { onClaim(selectedIds) }}
+            >
+              {t('pool.claimSelected')}
+            </button>
+            <button
+              type="button"
+              className="dsm-minimax-btn dsm-minimax-btn-outline"
+              disabled={busy || selectedIds.length === 0}
+              onClick={() => {
+                for (const id of selectedIds) {
+                  const entry = pool.accounts.find(item => item.id === id)
+                  const route = entry === undefined ? undefined : routeOf(entry)
+                  if (route !== undefined) onTest(route.route)
+                }
+              }}
+            >
+              {t('pool.testSelected')}
+            </button>
+          </div>
+
+          <table className="dsm-minimax-pool-table">
+            <thead>
+              <tr>
+                <th>{t('pool.colAccount')}</th>
+                <th>{t('pool.colCredits')}</th>
+                <th>{t('pool.colStatus')}</th>
+                <th>{t('pool.colCheckin')}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {pool.accounts.map(entry => {
+                const route = routeOf(entry)
+                const signin = route?.signin
+                const today = signin?.days.find(day => day.isToday)
+                return (
+                  <tr key={entry.id} className={entry.active ? 'dsm-minimax-pool-row-active' : ''}>
+                    <td>
+                      <label className="dsm-minimax-pool-pick">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(entry.id)}
+                          disabled={busy}
+                          onChange={() => { toggle(entry.id) }}
+                        />
+                      </label>
+                      <span className="dsm-minimax-pool-rank">{t('pool.rank', { rank: entry.rank })}</span>
+                      <button
+                        type="button"
+                        className="dsm-minimax-pool-move"
+                        disabled={busy || entry.rank <= 1}
+                        title={t('pool.moveUp')}
+                        onClick={() => { onMove(entry.id, 'up') }}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="dsm-minimax-pool-move"
+                        disabled={busy || entry.rank >= pool.accounts.length}
+                        title={t('pool.moveDown')}
+                        onClick={() => { onMove(entry.id, 'down') }}
+                      >
+                        ↓
+                      </button>
+                      <div className="dsm-minimax-pool-label">
+                        {entry.label}
+                        {entry.live && <span className="dsm-minimax-chip">{t('pool.live')}</span>}
+                        {entry.active && <span className="dsm-minimax-chip dsm-minimax-chip-on">{t('pool.active')}</span>}
+                        {entry.drained && <span className="dsm-minimax-chip">{t('pool.drained')}</span>}
+                        {!entry.participates && <span className="dsm-minimax-chip">{t('pool.optOut')}</span>}
+                      </div>
+                    </td>
+                    <td>
+                      {entry.balance === undefined
+                        ? <span className="dsm-minimax-hint">{t('pool.balanceUnknown')}</span>
+                        : <span className="dsm-minimax-pool-balance">{formatCredits(entry.balance)}</span>}
+                    </td>
+                    <td>
+                      {route === undefined
+                        ? <span className="dsm-minimax-hint">—</span>
+                        : (
+                          <span className="dsm-minimax-hint">
+                            {route.login.state === 'ready' ? t('pool.usable') : t(`login.${route.login.state}`)}
+                            {route.login.state === 'ready'
+                              ? ` · ${t('pool.probedAt', { at: new Date(nowMs).toLocaleTimeString() })}`
+                              : ''}
+                          </span>
+                        )}
+                    </td>
+                    <td>
+                      {signin === undefined
+                        ? <span className="dsm-minimax-hint">—</span>
+                        : today?.status === 3
+                          ? <span className="dsm-minimax-pool-checkin-on">{t('pool.checkedIn')}</span>
+                          : <span className="dsm-minimax-hint">{t('pool.notCheckedIn')}</span>}
+                    </td>
+                    <td className="dsm-minimax-pool-row-actions">
+                      {!entry.active && (
+                        <button
+                          type="button"
+                          className="dsm-minimax-btn dsm-minimax-btn-ghost"
+                          disabled={busy}
+                          onClick={() => { onSelectAccount(entry.id) }}
+                        >
+                          {t('pool.setActive')}
+                        </button>
+                      )}
+                      {route !== undefined && (
+                        <button
+                          type="button"
+                          className="dsm-minimax-btn dsm-minimax-btn-outline"
+                          disabled={busy || route.login.state !== 'ready'}
+                          onClick={() => { onTest(route.route) }}
+                        >
+                          {t('models.test')}
+                        </button>
+                      )}
+                      {!entry.live && route !== undefined && (
+                        <button
+                          type="button"
+                          className="dsm-minimax-btn dsm-minimax-btn-ghost"
+                          disabled={busy}
+                          onClick={() => { onDelete(route) }}
+                        >
+                          {t('account.remove')}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <div className="dsm-minimax-pool-transfer">
+        <button
+          type="button"
+          className="dsm-minimax-btn dsm-minimax-btn-outline"
+          disabled={busy || transfer.phase === 'busy' || selectedIds.length === 0}
+          onClick={() => { void doExport() }}
+        >
+          {transfer.phase === 'busy' ? t('pool.exporting') : t('pool.export')}
+        </button>
+        <button
+          type="button"
+          className="dsm-minimax-btn dsm-minimax-btn-outline"
+          disabled={busy || transfer.phase === 'busy'}
+          onClick={() => { fileRef.current?.click() }}
+        >
+          {t('pool.import')}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          style={{ display: 'none' }}
+          onChange={event => {
+            const file = event.target.files?.[0]
+            if (file !== undefined) void doPreview(file)
+            event.target.value = ''
+          }}
+        />
+        {transfer.phase === 'preview' && transfer.preview !== undefined && (
+          <div className="dsm-minimax-pool-preview">
+            {transfer.preview.map(entry => (
+              <label key={entry.id} className="dsm-minimax-pool-preview-row">
+                <input
+                  type="checkbox"
+                  checked={transfer.picked?.has(entry.id) ?? false}
+                  disabled={entry.duplicate || !entry.hasToken}
+                  onChange={() => {
+                    setTransfer(state => ({
+                      ...state,
+                      picked: (() => {
+                        const next = new Set(state.picked)
+                        if (next.has(entry.id)) next.delete(entry.id)
+                        else next.add(entry.id)
+                        return next
+                      })(),
+                    }))
+                  }}
+                />
+                <span>{entry.label}</span>
+                <span className="dsm-minimax-hint">{entry.region === 'cn' ? t('region.cn') : t('region.global')}</span>
+                {entry.duplicate && <span className="dsm-minimax-chip">{t('pool.importDuplicate')}</span>}
+                {!entry.hasToken && <span className="dsm-minimax-chip">{t('pool.importNoToken')}</span>}
+              </label>
+            ))}
+            <div className="dsm-minimax-pool-actions">
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-primary"
+                disabled={busy || (transfer.picked?.size ?? 0) === 0}
+                onClick={() => { void doImport() }}
+              >
+                {t('pool.importConfirm')}
+              </button>
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-ghost"
+                disabled={busy}
+                onClick={() => { setTransfer({ phase: 'idle' }) }}
+              >
+                {t('models.discard')}
+              </button>
+            </div>
+          </div>
+        )}
+        {transfer.note !== undefined && <p className="dsm-minimax-hint">{transfer.note}</p>}
+      </div>
+    </div>
+  )
+}
+
 /** 账号页：本机登录 + 副本 + 积分 + 签到。 */
 function AccountPanel(props: {
   status: MiniMaxStatusView
@@ -656,9 +1037,15 @@ function AccountPanel(props: {
   onClaim(): void
   onDelete(route: MiniMaxRouteView): void
   onSelectAccount(id: string): void
+  onTestRoute(route: string): void
+  onClaimAccounts(ids: readonly string[]): void
+  onMoveAccount(id: string, direction: 'up' | 'down'): void
   t: MiniMaxTranslate
 }): ReactElement {
-  const { status, region, nowMs, busy, message, onClaim, onDelete, onSelectAccount, t } = props
+  const {
+    status, region, nowMs, busy, message,
+    onClaim, onDelete, onSelectAccount, onTestRoute, onClaimAccounts, onMoveAccount, t,
+  } = props
   const routes = routesForRegion(effectiveRoutesOf(status), region)
   const live = routes.find(route => !isCopyRoute(route))
   const copies = routes.filter(route => isCopyRoute(route))
@@ -675,42 +1062,20 @@ function AccountPanel(props: {
         <p className="dsm-minimax-hint">{t('account.noneRegistered')}</p>
       )}
 
-      {pool !== undefined && pool.accounts.length > 1 && (
-        <>
-          <div className="dsm-minimax-panel-head">
-            <span className="dsm-minimax-panel-title">{t('pool.title')}</span>
-            <span className="dsm-minimax-hint">{t('pool.hint')}</span>
-          </div>
-          {pool.accounts.map(entry => (
-            <div key={entry.id} className={`dsm-minimax-row${entry.active ? ' dsm-minimax-row-active' : ''}`}>
-              <div className="dsm-minimax-row-main">
-                <div className="dsm-minimax-model-id">
-                  {entry.label}
-                  {entry.live && <span className="dsm-minimax-chip">{t('pool.live')}</span>}
-                  {entry.active && (
-                    <span className="dsm-minimax-chip dsm-minimax-chip-on">{t('pool.active')}</span>
-                  )}
-                  {entry.drained && <span className="dsm-minimax-chip">{t('pool.drained')}</span>}
-                </div>
-                <div className="dsm-minimax-model-name">
-                  {entry.balance === undefined
-                    ? t('pool.balanceUnknown')
-                    : t('pool.balance', { amount: formatCredits(entry.balance) })}
-                </div>
-              </div>
-              {!entry.active && (
-                <button
-                  type="button"
-                  className="dsm-minimax-btn-ghost"
-                  disabled={busy}
-                  onClick={() => onSelectAccount(entry.id)}
-                >
-                  {t('pool.setActive')}
-                </button>
-              )}
-            </div>
-          ))}
-        </>
+      {pool !== undefined && pool.accounts.length > 0 && (
+        <PoolTable
+          pool={pool}
+          routes={routes}
+          region={region}
+          nowMs={nowMs}
+          busy={busy}
+          t={t}
+          onSelectAccount={onSelectAccount}
+          onDelete={onDelete}
+          onTest={route => onTestRoute(route)}
+          onClaim={ids => onClaimAccounts(ids)}
+          onMove={(id, dir) => onMoveAccount(id, dir)}
+        />
       )}
 
       {routes.map(route => (
@@ -1466,6 +1831,33 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     setBusy(false)
   }, [region, load])
 
+  /** 批量签到勾选的账号；空 = 只签当前生效账号（旧行为）。 */
+  const handleClaimAccounts = useCallback(async (ids: readonly string[]): Promise<void> => {
+    setBusy(true)
+    const outcome = await postActionJson(MINIMAX_SIGNIN_CLAIM_PATH, { region, accountIds: [...ids] })
+    setActionMessage(outcome.message)
+    await load()
+    setBusy(false)
+  }, [region, load])
+
+  /** 调整池里副本的优先级。 */
+  const handleMoveAccount = useCallback(async (id: string, direction: 'up' | 'down'): Promise<void> => {
+    const outcome = await postAction(MINIMAX_ACCOUNT_MOVE_PATH, { region, id, direction })
+    if (!outcome.ok) setActionMessage(outcome.message)
+    await load()
+  }, [region, load])
+
+  /** 按账号路由测一发最小请求（池表格里的"测试"）。模型取第一个已启用的。 */
+  const handleTestRoute = useCallback(async (route: string): Promise<void> => {
+    const modelId = status?.models[0]?.id
+    if (modelId === undefined) {
+      setActionMessage(translate('models.empty'))
+      return
+    }
+    const outcome = await postActionJson(MINIMAX_MODEL_TEST_PATH, { route, model: modelId })
+    setActionMessage(outcome.ok ? translate('models.testOk') : outcome.message)
+  }, [translate, status])
+
   const handleDelete = useCallback(async (route: MiniMaxRouteView): Promise<void> => {
     if (route.accountId === undefined) return
     const outcome = await postAction(MINIMAX_ACCOUNT_REMOVE_PATH, { id: route.accountId })
@@ -1544,6 +1936,9 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                 onClaim={() => { void handleClaim() }}
                 onDelete={route => { void handleDelete(route) }}
                 onSelectAccount={id => { void handleSelectAccount(id) }}
+                onTestRoute={route => { void handleTestRoute(route) }}
+                onClaimAccounts={ids => { void handleClaimAccounts(ids) }}
+                onMoveAccount={(id, dir) => { void handleMoveAccount(id, dir) }}
                 t={translate}
               />
             )

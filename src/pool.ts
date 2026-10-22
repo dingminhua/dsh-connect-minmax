@@ -74,11 +74,16 @@ export function pickPoolAccount(
   candidates: readonly PoolCandidate[],
   activeId: string | undefined,
   nowMs: number,
+  disabled: ReadonlySet<string> = new Set(),
 ): PoolCandidate | undefined {
   if (candidates.length === 0) return undefined
+  // 当前生效账号永远可用：它已经在跑了，用户手动选的优先级最高。
   const active = candidates.find(candidate => candidate.id === activeId)
   if (active !== undefined && isPoolAccountUsable(active, nowMs)) return active
-  const usable = candidates.find(candidate => isPoolAccountUsable(candidate, nowMs))
+  // 其余候选里挑第一个"可用且没被禁用"的。
+  const usable = candidates.find(candidate =>
+    !disabled.has(candidate.id) && isPoolAccountUsable(candidate, nowMs))
+  // 全禁用/全耗尽时回落到"第一个可用 → 当前 → 第一个"，绝不编一个"没有账号"。
   return usable ?? active ?? candidates[0]
 }
 
@@ -96,6 +101,12 @@ export interface PoolSnapshotEntry {
   balance?: number
   /** 判定为积分耗尽的时间点；`undefined` = 不处于耗尽态。 */
   drainedUntilMs?: number
+  /** 这个账号对应的路由名。 */
+  route?: string
+  /** 在池里的位次（1 起）；自动换号按这个顺序选。 */
+  rank?: number
+  /** 是否参与自动换号/批量动作；`false` = 用户在卡片里取消勾选。 */
+  participates?: boolean
 }
 
 /** 池的快照：卡片据此展示"池里有哪些号、现在用哪个、谁没钱了"。 */
@@ -116,6 +127,8 @@ export interface PoolAccount {
   source: MiniMaxCredentialSource
   /** 是否本机登录（不是副本）。 */
   live: boolean
+  /** 这个账号对应的路由名（测试/删除按钮按它打）。 */
+  route?: string
 }
 
 /**
@@ -229,6 +242,7 @@ export class MiniMaxAccountPool implements MiniMaxCredentialSource {
       this.accounts.map(account => this.candidateOf(account.id)),
       this.activeId,
       Date.now(),
+      this.disabled,
     )
     if (picked === undefined) throw new Error('账号池为空：没有可用的 MiniMax 账号。')
 
@@ -257,7 +271,7 @@ export class MiniMaxAccountPool implements MiniMaxCredentialSource {
   /** 生成状态卡片用的快照。 */
   describe(nowMs: number = Date.now()): PoolSnapshot {
     return {
-      accounts: this.accounts.map((account) => {
+      accounts: this.accounts.map((account, index) => {
         const state = this.candidateOf(account.id)
         const drained = state.drainedUntilMs !== undefined && state.drainedUntilMs > nowMs
         return {
@@ -267,16 +281,31 @@ export class MiniMaxAccountPool implements MiniMaxCredentialSource {
           active: account.id === this.activeId,
           ...state.balance === undefined ? {} : { balance: state.balance },
           ...drained ? { drainedUntilMs: state.drainedUntilMs } : {},
+          ...account.route === undefined ? {} : { route: account.route },
+          rank: index + 1,
+          participates: !this.disabled.has(account.id),
         }
       }),
       ...this.activeId === undefined ? {} : { active: this.activeId },
     }
   }
 
+  /**
+   * 设置不参与自动换号的账号 id。
+   *
+   * 当前生效账号永远可用（它已经在跑了）；其余被禁用的在挑选时跳过。全禁用时
+   * 回落到"第一个可用"，绝不编一个"没有账号"。
+   */
+  setDisabled(ids: readonly string[]): void {
+    this.disabled = new Set(ids)
+  }
+
   /** 清空当前账号的缓存（401 之后由适配器调用）。 */
   invalidate(): void {
     for (const account of this.accounts) account.source.invalidate()
   }
+
+  private disabled: Set<string> = new Set()
 
   private candidateOf(id: string): PoolCandidate {
     return this.states.get(id) ?? { id }

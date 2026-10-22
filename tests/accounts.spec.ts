@@ -10,6 +10,9 @@ import {
   accountOriginOf,
   accountRouteOf,
   accountStateOf,
+  buildTransferFile,
+  importTransferFile,
+  previewTransferFile,
   readAccounts,
   readActiveSelections,
   refreshAccountCredential,
@@ -256,5 +259,65 @@ describe('当前选中的账号（池的持久化选择）', () => {
     const path = join(dir, '.minimax-accounts.json')
     await writeFile(path, JSON.stringify({ schemaVersion: 1, accounts: [], activeByRegion: { cn: 'cn-a', bogus: 'x' } }), 'utf8')
     expect(readActiveSelections(path)).toEqual({ cn: 'cn-a' })
+  })
+})
+
+describe('账号传输：导出 / 预览 / 导入', () => {
+  const account = (over: Partial<MiniMaxStoredAccount> = {}): MiniMaxStoredAccount => ({
+    id: 'cn-abcdef01',
+    region: 'cn',
+    label: '副本 1',
+    loginEpoch: 'abcdef01-xxxx',
+    accessToken: 'mmoat_a',
+    refreshToken: 'mmor_a',
+    expiresAtMs: Date.now() + 3_600_000,
+    owned: true,
+    createdAtMs: Date.now(),
+    ...over,
+  })
+
+  it('导出只含勾选的账号，且带凭据（文件本身就是敏感物）', () => {
+    const file = buildTransferFile([account(), account({ id: 'cn-22222222', loginEpoch: '22222222-x' })], ['cn-abcdef01'])
+    expect(file?.accounts).toHaveLength(1)
+    expect(file?.accounts[0]?.accessToken).toBe('mmoat_a')
+    expect(file?.kind).toBe('dsh-connect-minmax-accounts')
+  })
+
+  it('空勾选 = 一个都不导（不是"全部"）', () => {
+    expect(buildTransferFile([account()], [])).toBeUndefined()
+  })
+
+  it('预览不含 token：只有展示字段与 hasToken 布尔量', () => {
+    const file = buildTransferFile([account()], ['cn-abcdef01'])
+    const preview = previewTransferFile(JSON.stringify(file), [])
+    expect(preview).toHaveLength(1)
+    expect(JSON.stringify(preview)).not.toContain('mmoat_a')
+    expect(preview?.[0]?.hasToken).toBe(true)
+    expect(preview?.[0]?.duplicate).toBe(false)
+  })
+
+  it('库里已有的同一次登录在预览里标重复', () => {
+    const file = buildTransferFile([account()], ['cn-abcdef01'])
+    const preview = previewTransferFile(JSON.stringify(file), [account()])
+    expect(preview?.[0]?.duplicate).toBe(true)
+  })
+
+  it('不是传输文件 / 版本不符 → 预览 undefined（不猜）', () => {
+    expect(previewTransferFile('{"kind":"other","version":1,"accounts":[]}', [])).toBeUndefined()
+    expect(previewTransferFile('not json', [])).toBeUndefined()
+  })
+
+  it('导入写进库且 owned=true（刷新链归插件）；重复跳过不覆盖', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'minmax-transfer-'))
+    const path = join(dir, 'accounts.json')
+    const file = buildTransferFile([account()], ['cn-abcdef01'])
+    const first = await importTransferFile(JSON.stringify(file), ['cn-abcdef01'], path)
+    expect(first.added).toEqual(['cn-abcdef01'])
+    const stored = await readAccounts(path)
+    expect(stored[0]?.owned).toBe(true)
+    // 再导一次：同一次登录已在库里 → 跳过，绝不覆盖正在用的凭据。
+    const second = await importTransferFile(JSON.stringify(file), ['cn-abcdef01'], path)
+    expect(second.added).toEqual([])
+    expect(second.skipped).toEqual(['cn-abcdef01'])
   })
 })

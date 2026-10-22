@@ -49,6 +49,8 @@ import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } 
 import {
   accountDisplayNameOf,
   accountRouteOf,
+  buildTransferFile,
+  importTransferFile,
   readAccounts,
   readAccountsSync,
   readActiveSelections,
@@ -56,6 +58,7 @@ import {
   syncLiveAccount,
   writeAccounts,
 } from './accounts.ts'
+import type { MiniMaxStoredAccount } from './accounts.ts'
 import { MiniMaxAccountSource } from './account-source.ts'
 import { MiniMaxAccountPool, type PoolAccount } from './pool.ts'
 import { registerMiniMaxActionRoutes } from './actions.ts'
@@ -150,6 +153,7 @@ export interface MiniMaxConfig {
   modelContextWindows?: Record<string, number>
   modelImages?: Record<string, boolean>
   modelThinkingOff?: Record<string, boolean>
+  poolDisabled?: string[]
   reasoningEffort?: string
 }
 
@@ -186,6 +190,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .union(MINIMAX_REASONING_EFFORTS.map(level => z.const(level)))
     .default('medium')
     .description('宿主未指定档位时的默认思考强度（provider 级：pi-ai 没有"每模型默认档"这个概念）。'),
+  poolDisabled: z
+    .array(z.string())
+    .default([])
+    .description('不参与自动换号/批量签到/批量测试的账号 id；默认全部参与。'),
   modelThinkingOff: z
     .dict(z.boolean())
     .default({})
@@ -382,8 +390,10 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
           label: accountDisplayNameOf(account),
           live: false,
           source: accountSourceOf(account),
+          route: accountRouteOf(account),
         }))
       pool.setAccounts(live === undefined ? copies : [live, ...copies])
+      pool.setDisabled(config.poolDisabled ?? [])
       if (!restoredRegions.has(region)) {
         restoredRegions.add(region)
         const remembered = readActiveSelections()[region]
@@ -494,6 +504,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       label: '本机登录',
       source,
       live: true,
+      route: routeForRegion(region),
     }
     const pool = new MiniMaxAccountPool(region, { regionLabel: auth.regionLabel, baseUrl })
     pool.setAccounts([liveAccount])
@@ -621,6 +632,18 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         if (auth === undefined) throw new Error(`本机没有注册${region === 'global' ? '国际版' : '国内版'}的登录路由。`)
         return auth.token(signal)
       },
+      tokenForAccount: async (region, id, signal) => {
+        // 本机登录走活凭据；副本走它自己的源（不碰 mcode 的续期链）。
+        if (id === LIVE_ACCOUNT_ID) {
+          const auth = liveAuths.get(region)
+          if (auth === undefined) throw new Error('本机登录路由不存在。')
+          return auth.token(signal)
+        }
+        const pool = regionPools.get(region)
+        const account = pool?.list().find(entry => entry.id === id)
+        if (account === undefined) throw new Error(`池里没有账号 ${id}。`)
+        return account.source.token(signal)
+      },
       saveField: async (field, value) => {
         // 真写入：在宿主进程里 settings.mutate。浏览器侧 ConfigForm.set 在这台
         // 宿主上会静默不落盘（workbuddy 0.1.7 缺陷同款），所以保存必须走这里。
@@ -649,6 +672,42 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
           ? stored as Record<string, unknown>
           : undefined
+      },
+      exportAccounts: async (ids) => buildTransferFile(readAccountsSync(), ids),
+      importAccounts: async (raw, ids) => {
+        const result = await importTransferFile(raw, ids)
+        // 导入后立刻重算池：否则新账号要等下一次 60s 对账才出现，
+        // 用户看到的就是"导入了但列表里没有"。
+        if (result.added.length > 0) reconcileAccounts()
+        return result
+      },
+      moveAccount: async (region, id, direction) => {
+        const pool = regionPools.get(region)
+        if (pool === undefined) return false
+        const order = pool.list().map(entry => entry.id)
+        const index = order.indexOf(id)
+        if (index < 0) return false
+        const target = direction === 'up' ? index - 1 : index + 1
+        if (target < 0 || target >= order.length) return false
+        const swapped = [...order]
+        const from = swapped[index]
+        const to = swapped[target]
+        if (from === undefined || to === undefined) return false
+        swapped[index] = to
+        swapped[target] = from
+        // 池顺序来自库里的副本顺序：把新顺序写回库，重启后也保持。
+        const accounts = readAccountsSync()
+        const copies = accounts.filter(account => account.region === region && account.owned)
+        const byId = new Map(copies.map(account => [account.id, account]))
+        const live = order.find(entry => !byId.has(entry))
+        const reordered = swapped
+          .filter(entry => byId.has(entry))
+          .map(entry => byId.get(entry) as MiniMaxStoredAccount)
+        const others = accounts.filter(account => !byId.has(account.id))
+        await writeAccounts([...others, ...reordered])
+        reconcileAccounts()
+        void live
+        return true
       },
       refreshAccount: async (region) => {
         // 刷新要真的重新读一遍，而不是让浏览器端重拉缓存：

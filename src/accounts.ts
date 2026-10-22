@@ -403,3 +403,193 @@ export async function refreshAccountCredential(
   }
   return { ok: true, accessToken, refreshToken, expiresAtMs: nowMs + expiresInSec * 1000 }
 }
+
+// ---------------------------------------------------------------------------
+// 账号传输：导出 / 预览 / 导入
+// ---------------------------------------------------------------------------
+
+/** 传输文件格式版本。 */
+const TRANSFER_VERSION = 1
+
+/** 导出文件里的一条账号（**含凭据**，所以文件本身就是敏感物）。 */
+export interface MiniMaxTransferEntry {
+  region: MiniMaxRegion
+  label: string
+  loginEpoch: string
+  accessToken: string
+  refreshToken: string
+  expiresAtMs: number
+  generation?: number
+  owned: boolean
+}
+
+/** 传输文件整体。 */
+export interface MiniMaxTransferFile {
+  kind: 'dsh-connect-minmax-accounts'
+  version: number
+  exportedAtMs: number
+  accounts: MiniMaxTransferEntry[]
+}
+
+/** 预览里的一条（**不含 token**，token 明文永不进浏览器）。 */
+export interface MiniMaxTransferPreviewEntry {
+  /** 导入后会得到的 id。 */
+  id: string
+  region: MiniMaxRegion
+  label: string
+  /** 库里是否已有同一次登录（重复导入会被跳过）。 */
+  duplicate: boolean
+  /** 是否带可用凭据。 */
+  hasToken: boolean
+}
+
+/** 导入结果。 */
+export interface MiniMaxImportResult {
+  added: string[]
+  skipped: string[]
+}
+
+/** 账号 id 的算法与存储一致：`<region>-<loginEpoch 前 8 位>`。 */
+export function transferAccountIdOf(region: MiniMaxRegion, loginEpoch: string): string {
+  return `${region}-${loginEpoch.slice(0, 8)}`
+}
+
+/**
+ * 把库里的账号导出成传输文件。
+ *
+ * 文件**含凭据**（access/refresh token）：这是"把账号搬到另一台机器"的唯一办法，
+ * 所以文件本身就是敏感物——卡片在下载前必须明确警告，且只经 loopback 端点出。
+ *
+ * @param accounts - 当前库。
+ * @param ids - 要导出的账号 id；空数组 = 一个都不导（不是"全部"）。
+ * @param path - 库路径（测试用）。
+ * @returns 传输文件；没有任何匹配时 `undefined`。
+ */
+export function buildTransferFile(
+  accounts: readonly MiniMaxStoredAccount[],
+  ids: readonly string[],
+): MiniMaxTransferFile | undefined {
+  const wanted = new Set(ids)
+  const picked = accounts.filter(account => wanted.has(account.id))
+  if (picked.length === 0) return undefined
+  return {
+    kind: 'dsh-connect-minmax-accounts',
+    version: TRANSFER_VERSION,
+    exportedAtMs: Date.now(),
+    accounts: picked.map(account => ({
+      region: account.region,
+      label: account.label,
+      loginEpoch: account.loginEpoch,
+      accessToken: account.accessToken,
+      refreshToken: account.refreshToken,
+      expiresAtMs: account.expiresAtMs,
+      ...account.generation === undefined ? {} : { generation: account.generation },
+      owned: account.owned,
+    })),
+  }
+}
+
+/**
+ * 解析一个传输文件，给出**脱敏**预览。
+ *
+ * 只认自己的格式（`kind` + `version`）；形状不符的条目直接丢弃。预览**不含
+ * token**——token 明文永不进浏览器，卡片只拿展示字段与 hasToken 布尔量。
+ *
+ * @param raw - 文件内容（JSON 文本）。
+ * @param existing - 当前库（用来标重复）。
+ * @returns 预览条目；文件不可解析时 `undefined`。
+ */
+export function previewTransferFile(
+  raw: string,
+  existing: readonly MiniMaxStoredAccount[],
+): MiniMaxTransferPreviewEntry[] | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+  const file = parsed as Record<string, unknown>
+  if (file['kind'] !== 'dsh-connect-minmax-accounts') return undefined
+  if (file['version'] !== TRANSFER_VERSION) return undefined
+  if (!Array.isArray(file['accounts'])) return undefined
+  const have = new Set(existing.map(account => account.id))
+  const out: MiniMaxTransferPreviewEntry[] = []
+  for (const item of file['accounts']) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    const region = entry['region'] === 'global' ? 'global' as const : entry['region'] === 'cn' ? 'cn' as const : undefined
+    const loginEpoch = typeof entry['loginEpoch'] === 'string' ? entry['loginEpoch'] : undefined
+    if (region === undefined || loginEpoch === undefined) continue
+    const id = transferAccountIdOf(region, loginEpoch)
+    out.push({
+      id,
+      region,
+      label: typeof entry['label'] === 'string' ? entry['label'] : id,
+      duplicate: have.has(id),
+      hasToken: typeof entry['accessToken'] === 'string' && entry['accessToken'] !== '',
+    })
+  }
+  return out
+}
+
+/**
+ * 把传输文件里的账号写进库。
+ *
+ * **重复跳过**：同一次登录（同 id）已在库里就跳过，不覆盖——覆盖会把用户正在
+ * 用的凭据换成文件里那份可能更旧的，等于悄悄换号。
+ *
+ * @param raw - 文件内容。
+ * @param ids - 要导入的条目 id（预览里勾的那些）。
+ * @param path - 库路径（测试用）。
+ * @returns 加了哪些、跳了哪些。
+ */
+export async function importTransferFile(
+  raw: string,
+  ids: readonly string[],
+  path: string = minimaxAccountsPath(),
+): Promise<MiniMaxImportResult> {
+  const preview = previewTransferFile(raw, await readAccounts(path))
+  if (preview === undefined) return { added: [], skipped: [] }
+  const wanted = new Set(ids)
+  const file = JSON.parse(raw) as { accounts: Record<string, unknown>[] }
+  const current = await readAccounts(path)
+  const have = new Set(current.map(account => account.id))
+  const added: string[] = []
+  const skipped: string[] = []
+  const next = [...current]
+  for (const item of file['accounts']) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    const region = entry['region'] === 'global' ? 'global' as const : entry['region'] === 'cn' ? 'cn' as const : undefined
+    const loginEpoch = typeof entry['loginEpoch'] === 'string' ? entry['loginEpoch'] : undefined
+    const accessToken = typeof entry['accessToken'] === 'string' ? entry['accessToken'] : ''
+    const refreshToken = typeof entry['refreshToken'] === 'string' ? entry['refreshToken'] : ''
+    const expiresAtMs = typeof entry['expiresAtMs'] === 'number' ? entry['expiresAtMs'] : 0
+    if (region === undefined || loginEpoch === undefined || accessToken === '') continue
+    const id = transferAccountIdOf(region, loginEpoch)
+    if (!wanted.has(id)) continue
+    if (have.has(id)) {
+      skipped.push(id)
+      continue
+    }
+    next.push({
+      id,
+      region,
+      label: typeof entry['label'] === 'string' ? entry['label'] : id,
+      loginEpoch,
+      accessToken,
+      refreshToken,
+      expiresAtMs,
+      ...typeof entry['generation'] === 'number' ? { generation: entry['generation'] } : {},
+      // 导入的副本刷新链归插件所有：mcode 不持有它。
+      owned: true,
+      createdAtMs: Date.now(),
+    })
+    have.add(id)
+    added.push(id)
+  }
+  if (added.length > 0) await writeAccounts(next, path)
+  return { added, skipped }
+}

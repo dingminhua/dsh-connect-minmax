@@ -284,4 +284,39 @@ export const MINIMAX_CARD_CSS = `
 .dsm-minimax-cheer-star{color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-minimax-btn-primary{border-color:var(--dsw-alias-brand-primary,#5686fe);color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-minimax-btn-primary:disabled{opacity:.5;cursor:default}
+.dsm-minimax-pool{display:flex;flex-direction:column;gap:10px}
+.dsm-minimax-pool-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-minimax-pool-table{width:100%;border-collapse:collapse;border:1px solid var(--dsw-alias-border-l2,#36373b);border-radius:10px;overflow:hidden}
+.dsm-minimax-pool-table th{
+  text-align:left;padding:8px 10px;font-size:11px;font-weight:600;
+  color:var(--dsw-alias-label-tertiary,#999);background:var(--dsw-alias-bg-layer-2,#232529);
+  border-bottom:1px solid var(--dsw-alias-border-l2,#36373b);white-space:nowrap;
+}
+.dsm-minimax-pool-table td{
+  padding:10px;vertical-align:top;font-size:12px;line-height:18px;
+  border-bottom:1px solid var(--dsw-alias-border-l2,#36373b);
+}
+.dsm-minimax-pool-table tr:last-child td{border-bottom:0}
+.dsm-minimax-pool-row-active td{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5686fe) 6%,transparent)}
+.dsm-minimax-pool-pick{display:inline-flex;align-items:center;margin-right:6px}
+.dsm-minimax-pool-pick input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-minimax-pool-rank{
+  display:inline-block;padding:0 6px;border-radius:999px;font-size:10px;line-height:16px;
+  color:var(--dsw-alias-brand-primary,#5686fe);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#5686fe) 14%,transparent);
+  margin-right:4px;white-space:nowrap;
+}
+.dsm-minimax-pool-move{
+  border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#999);
+  font-size:11px;cursor:pointer;padding:0 2px;
+}
+.dsm-minimax-pool-move:disabled{opacity:.35;cursor:default}
+.dsm-minimax-pool-label{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
+.dsm-minimax-pool-balance{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-minimax-pool-checkin-on{color:#3fb950}
+.dsm-minimax-pool-row-actions{white-space:nowrap;text-align:right}
+.dsm-minimax-pool-row-actions .dsm-minimax-btn{margin-left:6px}
+.dsm-minimax-pool-transfer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l2,#36373b)}
+.dsm-minimax-pool-preview{display:flex;flex-direction:column;gap:6px;width:100%}
+.dsm-minimax-pool-preview-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.dsm-minimax-pool-preview-row input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 `

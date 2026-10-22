@@ -18,7 +18,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { routeForRegion, type MiniMaxRegion } from './catalog.ts'
 import { claimSignin, fetchSigninStatus } from './credits.ts'
-import { accountRouteOf, readAccounts, writeAccounts } from './accounts.ts'
+import { accountRouteOf, previewTransferFile, readAccounts, writeAccounts } from './accounts.ts'
 import { invalidateAccountCache, isLoopbackRequest, json, safeMessage } from './status.ts'
 
 /** 动作路由的挂载点。 */
@@ -30,19 +30,24 @@ import { invalidateAccountCache, isLoopbackRequest, json, safeMessage } from './
  * 路径，而两边都"有常量"、都不报错。单一出处就是为了避免这种沉默的不一致。
  */
 import {
+  MINIMAX_ACCOUNT_MOVE_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
+  MINIMAX_ACCOUNT_TRANSFER_PATH,
   MINIMAX_MODEL_TEST_PATH,
   MINIMAX_SETTINGS_SAVE_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
   unwrapVolatileDeep,
 } from './status-paths.ts'
+import type { MiniMaxImportResult, MiniMaxTransferFile } from './accounts.ts'
 
 export {
+  MINIMAX_ACCOUNT_MOVE_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
+  MINIMAX_ACCOUNT_TRANSFER_PATH,
   MINIMAX_MODEL_TEST_PATH,
   MINIMAX_SETTINGS_SAVE_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
@@ -50,11 +55,15 @@ export {
 
 /** 请求体上限：这些动作只带一个 id 或一个模型名。 */
 const MAX_BODY_BYTES = 8_192
+/** 传输端点上限：文件含多个凭据（access+refresh token × N）。 */
+const TRANSFER_MAX_BODY_BYTES = 512 * 1024
 
 /** 动作路由需要的依赖。 */
 export interface MiniMaxActionDeps {
   /** 按区域取一个可用 token（本机登录优先）。 */
   tokenForRegion(region: MiniMaxRegion, signal?: AbortSignal): Promise<string>
+  /** 按账号 id 取 token（批量签到/测试勾选的账号时用）。 */
+  tokenForAccount?(region: MiniMaxRegion, id: string, signal?: AbortSignal): Promise<string>
   /**
    * 按路由测试一次最小请求。
    *
@@ -69,6 +78,12 @@ export interface MiniMaxActionDeps {
    * 异常带回来，所以失败是有名字的，而不是一个被吞掉的 ok:false。
    */
   saveField?(field: string, value: unknown): Promise<Record<string, unknown> | undefined>
+  /** 导出账号副本成传输文件（含凭据，只经 loopback 出）。 */
+  exportAccounts?(ids: readonly string[]): Promise<MiniMaxTransferFile | undefined>
+  /** 把传输文件里的账号写进库；重复跳过。 */
+  importAccounts?(raw: string, ids: readonly string[]): Promise<MiniMaxImportResult>
+  /** 调整池里副本的优先级；`up`/`down`。 */
+  moveAccount?(region: MiniMaxRegion, id: string, direction: 'up' | 'down'): Promise<boolean>
   testModel(route: string, model: string, signal?: AbortSignal): Promise<MiniMaxModelTestResult>
   /**
    * 把池里某个账号设为某区域的当前账号。
@@ -112,13 +127,16 @@ export interface MiniMaxActionContext {
  *
  * 超限、非法 JSON、非对象都返回 `undefined`：动作接口宁可不做事，也不猜参数。
  */
-async function readBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
+async function readBody(
+  req: IncomingMessage,
+  maxBytes: number = MAX_BODY_BYTES,
+): Promise<Record<string, unknown> | undefined> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
     size += buffer.byteLength
-    if (size > MAX_BODY_BYTES) return undefined
+    if (size > maxBytes) return undefined
     chunks.push(buffer)
   }
   if (size === 0) return {}
@@ -144,6 +162,7 @@ function stringOf(value: unknown): string | undefined {
 async function guardPost(
   req: IncomingMessage,
   res: ServerResponse,
+  maxBytes: number = MAX_BODY_BYTES,
 ): Promise<Record<string, unknown> | undefined> {
   if (req.method !== 'POST') {
     json(res, 405, { error: 'method not allowed' })
@@ -153,7 +172,7 @@ async function guardPost(
     json(res, 403, { error: 'origin-not-trusted' })
     return undefined
   }
-  return await readBody(req)
+  return await readBody(req, maxBytes)
 }
 
 /**
@@ -178,7 +197,29 @@ export function registerMiniMaxActionRoutes(
       if (body === undefined) return
       const region = regionOf(body['region'])
       if (region === undefined) return json(res, 400, { error: 'region must be cn or global' })
+      // 批量：勾选了账号就逐个领；没勾就只领当前生效账号（旧行为）。
+      const ids = Array.isArray(body['accountIds'])
+        ? (body['accountIds'] as unknown[]).filter((item): item is string => typeof item === 'string')
+        : []
+      if (ids.length > 0 && deps.tokenForAccount === undefined) {
+        return json(res, 503, { error: '批量签到不可用。' })
+      }
       try {
+        if (ids.length > 0) {
+          const results: Array<{ id: string, claimed: boolean } & { message?: string | undefined }> = []
+          for (const id of ids) {
+            const token = await (deps.tokenForAccount as NonNullable<typeof deps.tokenForAccount>)(region, id)
+            const status = await fetchSigninStatus(region, token)
+            if (!status.ok) { results.push({ id, claimed: false, message: status.error }); continue }
+            if (!status.claimableToday) { results.push({ id, claimed: false, message: '今天不需要领取。' }); continue }
+            const outcome = await claimSignin(region, token)
+            results.push({ id, claimed: outcome.claimed, message: outcome.message })
+            invalidateAccountCache(accountRouteOf({ id }))
+          }
+          invalidateAccountCache(routeForRegion(region))
+          const anyClaimed = results.some(entry => entry.claimed)
+          return json(res, 200, { ok: true, claimed: anyClaimed, results })
+        }
         const token = await deps.tokenForRegion(region)
         // 先问服务端"今天到底能不能领"：能领才发 claim。上游的 status 是四值枚举
         // （1 未到 / 2 可领 / 3 已领 / 4 不发），跳过这一步就会对着不能领的日子发写请求。
@@ -251,6 +292,69 @@ export function registerMiniMaxActionRoutes(
       } catch (error: unknown) {
         return json(res, 500, { error: safeMessage(error) })
       }
+    },
+  }))
+
+  // ---------------------------------------------------------------
+  // POST /account/transfer —— 导出 / 预览 / 导入账号副本
+  // ---------------------------------------------------------------
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_ACCOUNT_TRANSFER_PATH,
+    handler: async (req, res) => {
+      // 传输文件含多个凭据，比"id/模型名"大得多；给一个宽松但仍有限的上限。
+      const body = await guardPost(req, res, TRANSFER_MAX_BODY_BYTES)
+      if (body === undefined) return
+      const action = body['action']
+      if (action === 'export') {
+        if (deps.exportAccounts === undefined) return json(res, 503, { error: '导出不可用。' })
+        const ids = body['accountIds']
+        if (!Array.isArray(ids) || ids.length === 0 || !ids.every(item => typeof item === 'string')) {
+          return json(res, 400, { error: 'accountIds must be a non-empty array of strings' })
+        }
+        const file = await deps.exportAccounts(ids as string[])
+        if (file === undefined) return json(res, 409, { error: 'none of the named accounts was found' })
+        return json(res, 200, { ok: true, file })
+      }
+      if (action === 'preview' || action === 'import') {
+        const raw = typeof body['file'] === 'string' ? body['file'] : undefined
+        if (raw === undefined) return json(res, 400, { error: 'file must be a JSON string' })
+        if (action === 'preview') {
+          const preview = previewTransferFile(raw, await readAccounts())
+          if (preview === undefined) return json(res, 400, { error: 'not a minimax transfer file' })
+          return json(res, 200, { ok: true, preview })
+        }
+        if (deps.importAccounts === undefined) return json(res, 503, { error: '导入不可用。' })
+        const ids = body['accountIds']
+        if (!Array.isArray(ids) || !ids.every(item => typeof item === 'string')) {
+          return json(res, 400, { error: 'accountIds must be an array of strings' })
+        }
+        const result = await deps.importAccounts(raw, ids as string[])
+        return json(res, 200, { ok: true, ...result })
+      }
+      return json(res, 400, { error: 'action must be export, preview, or import' })
+    },
+  }))
+
+  // ---------------------------------------------------------------
+  // POST /account/move —— 调整池里副本的优先级
+  // ---------------------------------------------------------------
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_ACCOUNT_MOVE_PATH,
+    handler: async (req, res) => {
+      const body = await guardPost(req, res)
+      if (body === undefined) return
+      const region = regionOf(body['region'])
+      if (region === undefined) return json(res, 400, { error: 'region must be cn or global' })
+      const id = typeof body['id'] === 'string' ? body['id'] : undefined
+      if (id === undefined) return json(res, 400, { error: 'id is required' })
+      const direction = body['direction'] === 'up' ? 'up' : body['direction'] === 'down' ? 'down' : undefined
+      if (direction === undefined) return json(res, 400, { error: 'direction must be up or down' })
+      if (deps.moveAccount === undefined) return json(res, 503, { error: '调整顺序不可用。' })
+      const moved = await deps.moveAccount(region, id, direction)
+      if (!moved) return json(res, 404, { error: 'account not in this region pool' })
+      return json(res, 200, { ok: true })
     },
   }))
 

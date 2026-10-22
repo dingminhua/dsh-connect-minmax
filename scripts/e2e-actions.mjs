@@ -168,6 +168,20 @@ check('刷新重读凭据与积分成功', refreshOk.status === 200 && refreshOk
 const refreshBad = await post('/plugins/dsh-connect-minmax/account/refresh', { region: 'mars' })
 check('非法 region 回 400', refreshBad.status === 400)
 
+console.log('\n== POST /account/transfer ==')
+const badPreview = await post('/plugins/dsh-connect-minmax/account/transfer', { action: 'preview', file: 'not json' })
+check('坏文件回 400', badPreview.status === 400)
+const badAction = await post('/plugins/dsh-connect-minmax/account/transfer', { action: 'nope' })
+check('未知 action 回 400', badAction.status === 400)
+const noIds = await post('/plugins/dsh-connect-minmax/account/transfer', { action: 'export', accountIds: [] })
+check('空勾选导出回 400（不是"全部"）', noIds.status === 400)
+
+console.log('\n== POST /account/move ==')
+const moveBad = await post('/plugins/dsh-connect-minmax/account/move', { region: 'cn', id: 'nope', direction: 'up' })
+check('池里没有的 id 回 404', moveBad.status === 404)
+const moveDir = await post('/plugins/dsh-connect-minmax/account/move', { region: 'cn', id: 'live', direction: 'sideways' })
+check('非法 direction 回 400', moveDir.status === 400)
+
 console.log('\n== POST /signin/claim ==')
 if (!wantClaim) {
   console.log('  – 跳过（加 --claim 才会真的领当天积分）')
