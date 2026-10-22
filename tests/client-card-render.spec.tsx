@@ -34,8 +34,8 @@ const t: MiniMaxTranslate = (key, params) => {
 }
 
 const MODELS = [
-  { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 512_000, contextWindowOptions: [512_000, 1_000_000], upstreamInput: ['text', 'image'], maxTokens: 128_000, input: ['text', 'image'], reasoning: true },
-  { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', contextWindow: 204_800, upstreamInput: ['text', 'image'], maxTokens: 131_072, input: ['text', 'image'], reasoning: false },
+  { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 512_000, contextWindowOptions: [512_000, 1_000_000], upstreamInput: ['text', 'image'], thinkingOff: true, efforts: ['low','medium','high'], maxTokens: 128_000, input: ['text', 'image'], reasoning: true },
+  { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', contextWindow: 204_800, upstreamInput: ['text', 'image'], thinkingOff: true, efforts: ['low','high'], maxTokens: 131_072, input: ['text', 'image'], reasoning: false },
 ]
 
 /** 一份完整的状态文档：两条路由（国内就绪、国际未就绪）。 */
@@ -240,8 +240,8 @@ describe('MiniMaxCard 渲染', () => {
     await mount(writableScope())
     await clickPanel('models')
     const row = cardRowOf('MiniMax-M2.7')
-    // 只有"启用模型"一个复选框。
-    expect(row?.querySelectorAll('input[type=checkbox]').length ?? 0).toBe(1)
+    // 「启用模型」+「可关闭思考」两个复选框；图片那一项**没有**复选框（上游不支持）。
+    expect(row?.querySelectorAll('input[type=checkbox]').length ?? 0).toBe(2)
     expect(row?.textContent ?? '').toContain('models.imageNo')
   })
 

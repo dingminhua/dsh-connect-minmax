@@ -32,11 +32,14 @@ import {
   MINIMAX_MODELS,
   contextWindowOptionsOf,
   displayNameForRegion,
+  effortsOf,
+  thinkingOffOf,
   regionBaseUrl,
   routeForRegion,
   withContextWindow,
   withModelContextWindow,
   withModelImages,
+  withModelThinkingOff,
 } from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
@@ -145,6 +148,7 @@ export interface MiniMaxConfig {
   longContext?: boolean
   modelContextWindows?: Record<string, number>
   modelImages?: Record<string, boolean>
+  modelThinkingOff?: Record<string, boolean>
   reasoningEffort?: string
 }
 
@@ -181,6 +185,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .union(MINIMAX_REASONING_EFFORTS.map(level => z.const(level)))
     .default('medium')
     .description('宿主未指定档位时的默认思考强度（provider 级：pi-ai 没有"每模型默认档"这个概念）。'),
+  modelThinkingOff: z
+    .dict(z.boolean())
+    .default({})
+    .description('逐模型"是否提供关闭思考档"（id → 布尔）；只能关掉模型自己声明可关的，开启强制思考的模型会被忽略。'),
   modelImages: z
     .dict(z.boolean())
     .default({})
@@ -237,6 +245,7 @@ export function projectModel(
   longContext: boolean,
   contextOverrides: Record<string, number | undefined> | undefined,
   imageOverrides: Record<string, boolean | undefined> | undefined,
+  thinkingOffOverrides: Record<string, boolean | undefined> | undefined,
   warn: (message: string) => void,
 ): MiniMaxModelSpec {
   // `upstreamInput` 永远是掩码前的原值：卡片要靠它区分"上游不支持"与"用户关掉了"。
@@ -262,7 +271,18 @@ export function projectModel(
   if (wantsImages === true && !spec.input.includes('image')) {
     warn(`模型 "${spec.id}" 上游不支持图片输入，开启已被忽略。`)
   }
-  return withModelImages(spec, wantsImages, result)
+
+  // 「可关闭思考」同样只能关不能开：给强制思考的模型加 off 档会让上游 400。
+  const allowOff = thinkingOffOverrides?.[spec.id]
+  if (allowOff === true && !thinkingOffOf(spec)) {
+    warn(`模型 "${spec.id}" 强制思考，无法提供"关闭思考"档，开启已被忽略。`)
+  }
+  const withOff = withModelThinkingOff(spec, allowOff, withModelImages(spec, wantsImages, result))
+  return {
+    ...withOff,
+    thinkingOff: thinkingOffOf(withOff),
+    efforts: effortsOf(withOff),
+  }
 }
 
 /**
@@ -301,7 +321,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
    * 非法取值退回默认档并 warn——provider 拿到一个无效值比配置写错更难查。
    */
   const reasoningEffort = resolveReasoningEffort(config.reasoningEffort, warn)
-  const models = selectModels(config.models, warn).map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, warn))
+  const models = selectModels(config.models, warn).map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, config.modelThinkingOff, warn))
 
   /** 每个区域一条路由；装配方式完全相同，只有凭据面与 baseUrl 不同。 */
   const registeredRoutes: MiniMaxStatusRouteDeps[] = []
@@ -668,7 +688,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       models,
       // 全目录同样过一遍长上下文档位：卡片要展示的"上下文窗口"必须是用户
       // 当前设置下的真实值，否则勾了 longContext 卡片还显示 512K。
-      catalog: MINIMAX_MODELS.map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, warn)),
+      catalog: MINIMAX_MODELS.map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, config.modelThinkingOff, warn)),
       enabledRegions: requestedRegions,
       longContext,
       reasoningEffort,

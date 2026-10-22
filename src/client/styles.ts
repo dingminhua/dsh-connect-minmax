@@ -250,4 +250,38 @@ export const MINIMAX_CARD_CSS = `
 .dsm-minimax-btn-ghost:hover{
   color:#f85149;border-color:rgba(248,81,73,.4);background:rgba(248,81,73,.08);
 }
+.dsm-minimax-model-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dsm-minimax-model-details {
+  flex-basis: 100%;
+}
+.dsm-minimax-model-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  opacity: 0.72;
+}
+.dsm-minimax-tiers {
+  display: inline-flex;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dsm-minimax-tiers > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dsm-minimax-model-actions-buttons {
+  display: inline-flex;
+  gap: 6px;
+}
 `

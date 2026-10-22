@@ -199,6 +199,10 @@ export interface MiniMaxStatusModelSpec {
   contextWindowOptions?: readonly number[]
   /** 上游真实支持的模态（未经掩码）。 */
   upstreamInput?: readonly string[]
+  /** 是否提供「关闭思考」档位。 */
+  thinkingOff?: boolean
+  /** 可选推理档位（不含 off）。 */
+  efforts?: readonly string[]
   maxTokens: number
   input: readonly string[]
   reasoning: boolean
@@ -311,6 +315,8 @@ export function toStatusModels(models: readonly MiniMaxStatusModelSpec[]): MiniM
     ...model.upstreamInput === undefined
       ? {}
       : { upstreamInput: [...model.upstreamInput] },
+    ...model.thinkingOff === undefined ? {} : { thinkingOff: model.thinkingOff },
+    ...model.efforts === undefined ? {} : { efforts: [...model.efforts] },
     maxTokens: model.maxTokens,
     thinkingMode: model.thinkingMode,
     input: [...model.input],

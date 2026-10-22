@@ -129,6 +129,10 @@ export interface MiniMaxModelSpec {
    * 而这个字段永远是原值——卡片要靠它区分"上游不支持"与"用户关掉了"。
    */
   upstreamInput?: readonly string[]
+  /** 这个模型当前是否提供「关闭思考」档位（`modelThinkingOff` 关掉后为 false）。 */
+  thinkingOff?: boolean
+  /** 可选推理档位（不含 `off`），卡片元信息行如实展示。 */
+  efforts?: readonly string[]
   maxTokens: number
   input: readonly ('text' | 'image')[]
   reasoning: boolean
@@ -345,6 +349,42 @@ export function withModelImages(
     // "用户关掉了"渲染成"上游不支持"，那个复选框就再也勾不回来了。
     upstreamInput: [...spec.input],
   }
+}
+
+/**
+ * 按"是否允许关闭思考"调整目录项。
+ *
+ * 这里**只能关不能开**，和图片开关同一种不对称：`off` 档位只有在模型自己声明
+ * 可关时才存在；给一个强制思考的模型加上 `off`，用户选了它就会收到上游 400。
+ * 所以 `allow === true` 时原样返回（目录已经说过能不能关）。
+ *
+ * @param spec - 目录项。
+ * @param allow - 用户是否希望这个模型提供"关闭思考"档；`undefined` = 没动过。
+ * @param fallback - 需要回落时返回的结果。
+ * @returns 调整后的目录项。
+ */
+export function withModelThinkingOff(
+  spec: MiniMaxModelSpec,
+  allow: boolean | undefined,
+  fallback: MiniMaxModelSpec,
+): MiniMaxModelSpec {
+  if (allow !== false) return fallback
+  const map = fallback.thinkingLevelMap
+  if (map === undefined || !('off' in map)) return fallback
+  const { off: _dropped, ...rest } = map
+  return { ...fallback, thinkingLevelMap: rest, thinkingOff: false }
+}
+
+/** 目录项的默认 `thinkingOff`：`thinkingLevelMap` 里有没有 `off` 档。 */
+export function thinkingOffOf(spec: MiniMaxModelSpec): boolean {
+  return spec.thinkingLevelMap !== undefined && spec.thinkingLevelMap['off'] !== undefined && spec.thinkingLevelMap['off'] !== null
+}
+
+/** 目录项的可选档位（不含 `off`）。 */
+export function effortsOf(spec: MiniMaxModelSpec): string[] {
+  const map = spec.thinkingLevelMap
+  if (map === undefined) return []
+  return Object.keys(map).filter(level => level !== 'off' && map[level] !== null)
 }
 
 /** 按 id 取目录项；未知名返回 `undefined`（不做模糊匹配）。 */

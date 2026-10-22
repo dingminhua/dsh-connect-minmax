@@ -445,6 +445,8 @@ function statusOf(options: {
     contextWindow: 512_000,
     contextWindowOptions: [512_000, 1_000_000],
     upstreamInput: ['text', 'image'],
+    thinkingOff: true,
+    efforts: ['low', 'medium', 'high'],
     maxTokens: 128_000,
     input: ['text'],
     reasoning: true,

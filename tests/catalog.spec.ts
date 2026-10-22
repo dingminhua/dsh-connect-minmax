@@ -8,7 +8,26 @@
 import type { Model } from '@earendil-works/pi-ai'
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, contextWindowOptionsOf, findModelSpec, modelIds, regionBaseUrl, toPiModel, withContextWindow, withModelContextWindow, withModelImages, type MiniMaxModelSpec } from '../src/catalog.ts'
+import {
+  contextWindowOptionsOf,
+  DEFAULT_BASE_URL_CN,
+  DEFAULT_BASE_URL_GLOBAL,
+  effortsOf,
+  findModelSpec,
+  MINIMAX_EFFORT_LEVELS,
+  MINIMAX_M3_1_FLASH_PREVIEW,
+  MINIMAX_MODELS,
+  modelIds,
+  regionBaseUrl,
+  ROUTE,
+  thinkingOffOf,
+  toPiModel,
+  type MiniMaxModelSpec,
+  withContextWindow,
+  withModelContextWindow,
+  withModelImages,
+  withModelThinkingOff,
+} from '../src/catalog.ts'
 
 const byId = (id: string): MiniMaxModelSpec => {
   const spec = findModelSpec(id)
@@ -274,5 +293,39 @@ describe('withModelImages（不对称的能力掩码）', () => {
     const masked = withModelImages(IMAGE_MODEL, false, { ...IMAGE_MODEL, upstreamInput: [...IMAGE_MODEL.input] })
     expect(masked.input).toEqual(['text'])
     expect(masked.upstreamInput).toEqual(['text', 'image'])
+  })
+})
+
+describe('withModelThinkingOff / thinkingOffOf / effortsOf', () => {
+  it('可关思考的模型：关掉后 thinkingLevelMap 里不再有 off', () => {
+    const spec = byId('MiniMax-M2.7')
+    expect(thinkingOffOf(spec)).toBe(true)
+    const off = withModelThinkingOff(spec, false, spec)
+    expect(off.thinkingLevelMap?.['off']).toBeUndefined()
+    expect(thinkingOffOf(off)).toBe(false)
+    // 其它档位必须原样保留，否则关掉 off 会顺手把模型的能力删掉一半。
+    expect(Object.keys(off.thinkingLevelMap ?? {})).toEqual(Object.keys(spec.thinkingLevelMap ?? {}).filter(k => k !== 'off'))
+  })
+
+  it('强制思考的模型：请求 allow=true 也不会凭空造出 off 档', () => {
+    // 给强制思考的模型加 off 档 = 用户一选它就被上游 400，这是"开"的方向，
+    // 和图片开关一样只允许关不允许开。
+    const spec = byId('MiniMax-M3.1-Flash')
+    expect(thinkingOffOf(spec)).toBe(false)
+    const result = withModelThinkingOff(spec, true, spec)
+    expect(thinkingOffOf(result)).toBe(false)
+    // 目录用 `off: null` 表达"该档位不存在"（不是缺键），所以这里仍然是 null。
+    expect(result.thinkingLevelMap?.['off']).toBeNull()
+  })
+
+  it('没动过开关时原样返回 fallback', () => {
+    const spec = byId('MiniMax-M3')
+    const fallback = { ...spec, contextWindow: 123 }
+    expect(withModelThinkingOff(spec, undefined, fallback).contextWindow).toBe(123)
+  })
+
+  it('effortsOf 不含 off，且只列真实存在的档位', () => {
+    expect(effortsOf(byId('MiniMax-M3'))).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(effortsOf(byId('MiniMax-M2.7-highspeed'))).not.toContain('off')
   })
 })

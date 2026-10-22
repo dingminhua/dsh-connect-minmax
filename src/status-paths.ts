@@ -103,6 +103,10 @@ export interface MiniMaxModelView {
    * 空数组 = 旧版本应答没有这个字段，卡片按"`input` 即上游能力"处理。
    */
   upstreamInput: string[]
+  /** 这个模型是否提供「关闭思考」档位（强制思考的模型恒为 false）。 */
+  thinkingOff: boolean
+  /** 可选推理档位（不含 off）。 */
+  efforts: string[]
   maxTokens: number
   input: string[]
   reasoning: boolean
@@ -327,11 +331,13 @@ function parseModels(value: unknown): MiniMaxModelView[] {
       name: stringOf(row['name']) ?? id,
       ...badge === undefined ? {} : { badge },
       contextWindow: finiteNumberOf(row['contextWindow']) ?? 0,
-      contextWindowOptions: Array.isArray(row['contextWindowOptions'])
-        ? row['contextWindowOptions'].filter((item): item is number => typeof item === 'number')
-        : [],
+      contextWindowOptions: contextWindowOptionsOfRow(row),
       upstreamInput: Array.isArray(row['upstreamInput'])
         ? row['upstreamInput'].filter((item): item is string => typeof item === 'string')
+        : [],
+      thinkingOff: row['thinkingOff'] === true,
+      efforts: Array.isArray(row['efforts'])
+        ? row['efforts'].filter((item): item is string => typeof item === 'string')
         : [],
       maxTokens: finiteNumberOf(row['maxTokens']) ?? 0,
       input: Array.isArray(row['input'])
@@ -390,6 +396,24 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     })
   }
   return routes
+}
+
+/**
+ * 逐模型上下文档位。
+ *
+ * 应答里没带（或带了空数组）时用**当前窗口**兜底，卡片才能画出一个（禁用的）
+ * 档位——"这个模型只有这一档"本身是有用信息；什么都不画反而让人以为没读到。
+ *
+ * @param row - 应答里的模型行。
+ * @returns 至少一项的档位列表。
+ */
+function contextWindowOptionsOfRow(row: Record<string, unknown>): number[] {
+  const raw = Array.isArray(row['contextWindowOptions'])
+    ? row['contextWindowOptions'].filter((item): item is number => typeof item === 'number' && item > 0)
+    : []
+  if (raw.length > 0) return raw
+  const current = finiteNumberOf(row['contextWindow'])
+  return current === undefined ? [] : [current]
 }
 
 /**

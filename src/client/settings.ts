@@ -42,7 +42,8 @@ export interface MiniMaxSettingsScope {
 
 /** 卡片可写的字段名。 */
 export type MiniMaxWritableField
-  = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages' | 'reasoningEffort' | 'modelContextWindows'
+  = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages'
+    | 'modelThinkingOff' | 'reasoningEffort' | 'modelContextWindows'
 
 /** 写入没落地的错误。 */
 export class MiniMaxSettingsWriteError extends Error {
@@ -142,10 +143,19 @@ export function writeModelImages(
   return writeFlag(scope, 'modelImages', modelId, enabled)
 }
 
+/** 写入某个模型的「提供关闭思考档」开关（只能关，见 catalog 的 withModelThinkingOff）。 */
+export function writeModelThinkingOff(
+  scope: MiniMaxSettingsScope,
+  modelId: string,
+  allow: boolean,
+): Promise<void> {
+  return writeFlag(scope, 'modelThinkingOff', modelId, allow)
+}
+
 /** 写入一个"模型 id → 数值/布尔"映射里的单项。 */
 function writeFlag<T extends number | boolean>(
   scope: MiniMaxSettingsScope,
-  field: 'modelContextWindows' | 'modelImages',
+  field: 'modelContextWindows' | 'modelImages' | 'modelThinkingOff',
   modelId: string,
   value: T,
 ): Promise<void> {
