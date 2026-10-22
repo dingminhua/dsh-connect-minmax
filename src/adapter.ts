@@ -284,6 +284,24 @@ export async function* guardStream(
 }
 
 /**
+ * 从凭据来源里取出"换号"能力。
+ *
+ * 池化来源（`MiniMaxAccountPool`）有 `switchAway`，单账号来源没有。用能力探测
+ * 而不是加个构造参数：来源本来就是按接口注入的，多一个能力不该逼所有调用点改签名；
+ * 没有这个能力的来源拿到的就是 `undefined`，`guardStream` 也就不会去做那种重试。
+ *
+ * @param source - 任意凭据来源。
+ * @returns 换号函数；来源不支持时返回 `undefined`。
+ */
+export function switchAccountOf(
+  source: MiniMaxCredentialSource,
+): (() => boolean) | undefined {
+  const candidate = source as MiniMaxCredentialSource & { switchAway?: () => boolean }
+  if (typeof candidate.switchAway !== 'function') return undefined
+  return () => candidate.switchAway!()
+}
+
+/**
  * `PiAiAdapter` 的 MiniMax 包装。
  *
  * **`prepareCall` 与 `stream` 都要覆盖**：`PiAiAdapter.prepareCall()` 捕获的是
@@ -318,16 +336,13 @@ export class MiniMaxAdapter extends PiAiAdapter {
 
   /** 每次调用现建：`super.stream()` 每次都会取自己的快照，重试即新快照。 */
   private guard(): GuardStreamContext {
-    // 池化来源（`MiniMaxAccountPool`）多一个"换号"能力；单账号来源没有它，
-    // 于是 `switchAccount` 缺省，行为与以前完全一致。
-    const pooled = this.auth as MiniMaxCredentialSource & { switchAway?: () => boolean }
-    const switchAway = pooled.switchAway
+    const switchAccount = switchAccountOf(this.auth)
     return {
       acquire: () => this.auth.token(),
       invalidate: () => {
         this.auth.invalidate()
       },
-      ...typeof switchAway === 'function' ? { switchAccount: () => switchAway.call(pooled) } : {},
+      ...switchAccount === undefined ? {} : { switchAccount },
     }
   }
 }

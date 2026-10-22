@@ -117,6 +117,28 @@ would become six upstream calls per 10 seconds.
 qoder). MiniMax's brand marks are deliberately not used: this plugin reads your own local
 sign-in and does not impersonate the official client.
 
+## Account pool (0.6.0)
+
+A region can hold several accounts at once. When the active account runs out of credits, the
+request **switches accounts inside the same call** and continues — you get a normal reply instead
+of an "insufficient balance" error.
+
+- Candidates = the local login plus every **taken-over** copy of that region.
+- **Proactive**: whatever balance the status route reads is fed back into the pool, so an empty
+  account is skipped before a request is even sent.
+- **Reactive**: on a quota-class error, and only while **nothing has been streamed yet**, the call
+  switches account and retries once. Content already streamed cannot be retracted, so that case is
+  not retried.
+- The card's account page shows an **Account pool** block: balance, "in use" / "out of credits"
+  markers and a "Use this account" button. A manual choice is persisted in `activeByRegion` and
+  survives a restart.
+- The block is hidden when there is only one account — that is not a pool.
+
+**How an account gets into the pool**: it was logged into in MiniMax Code, the plugin mirrored it as
+a copy, and the plugin now owns its refresh chain. **Logging in from the plugin itself ("Add
+account" on the card) is not implemented yet** — the device-code flow is feasible (`/oauth2/device/code`
+returns a user_code), but that is a separate feature.
+
 ## Configuration
 
 | Field | Default | Meaning |

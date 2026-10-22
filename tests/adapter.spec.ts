@@ -2,14 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { PiAiAdapterOptions, ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
+
+import { MiniMaxAccountPool } from '../src/pool.ts'
 import {
-  INERT_AUTH,
-  MiniMaxAdapter,
-  PROVIDER_DISPLAY_NAME,
   classifyMessage,
   createMiniMaxProvider,
   errorText,
   guardStream,
+  INERT_AUTH,
+  MiniMaxAdapter,
+  PROVIDER_DISPLAY_NAME,
+  switchAccountOf,
 } from '../src/adapter.ts'
 import type { GuardStreamContext } from '../src/adapter.ts'
 import type { MiniMaxAuth } from '../src/auth.ts'
@@ -424,5 +427,35 @@ describe('guardStream / 积分耗尽自动换号', () => {
     const { guard } = fakeGuard()
     const run = () => fail(new Error('balance exhausted'))()
     await expectFailure(() => collect(guardStream(run, guard)), 'QUOTA')
+  })
+})
+
+describe('switchAccountOf（适配器如何发现池的换号能力）', () => {
+  /** 最小可用的凭据来源替身。 */
+  const localSource = (token = 'mmoat_x') => ({
+    region: 'cn' as const,
+    regionLabel: '国内版',
+    baseUrl: 'https://x',
+    token: async () => token,
+    invalidate: () => undefined,
+  })
+
+  it('池化来源 → 拿到换号函数，调用时真的换号', () => {
+    // 这是"自动切换"能被触发的前提：适配器只认接口，能力探测漏了，
+    // guardStream 那段 QUOTA 重试就永远不会执行。
+    const pool = new MiniMaxAccountPool('cn', { regionLabel: '国内版', baseUrl: 'https://x' })
+    pool.setAccounts([
+      { id: 'a', label: 'a', live: true, source: localSource('mmoat_a') },
+      { id: 'b', label: 'b', live: false, source: localSource('mmoat_b') },
+    ])
+    const switchAccount = switchAccountOf(pool)
+    expect(switchAccount).toBeDefined()
+    expect(pool.active).toBe('a')
+    expect(switchAccount?.()).toBe(true)
+    expect(pool.active).toBe('b')
+  })
+
+  it('单账号来源 → undefined（老行为完全不变）', () => {
+    expect(switchAccountOf(localSource())).toBeUndefined()
   })
 })

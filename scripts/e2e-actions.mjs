@@ -151,6 +151,17 @@ check('缺 id 回 400', removeNoId.status === 400)
 // ---------------------------------------------------------------------------
 // 4. 签到领取（默认跳过：它会真的改变账户状态）
 // ---------------------------------------------------------------------------
+console.log('\n== POST /account/select ==')
+const selectBadRegion = await post('/plugins/dsh-connect-minmax/account/select', { id: 'live', region: 'mars' })
+check('未知 region 回 400（不猜默认值）', selectBadRegion.status === 400)
+const selectBadId = await post('/plugins/dsh-connect-minmax/account/select', { id: 'cn-does-not-exist', region: 'cn' })
+check('池里没有的 id 回 404（不假装切成功）', selectBadId.status === 404)
+const selectNoId = await post('/plugins/dsh-connect-minmax/account/select', { region: 'cn' })
+check('缺 id 回 400', selectNoId.status === 400)
+// 切到当前账号本身是幂等的：写一次再写一次都该成功，且不该丢账号列表。
+const selectLive = await post('/plugins/dsh-connect-minmax/account/select', { id: 'live', region: 'cn' })
+check('切到本机登录成功', selectLive.status === 200 && selectLive.body.active === 'live', JSON.stringify(selectLive.body))
+
 console.log('\n== POST /signin/claim ==')
 if (!wantClaim) {
   console.log('  – 跳过（加 --claim 才会真的领当天积分）')
