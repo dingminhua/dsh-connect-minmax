@@ -134,7 +134,8 @@ export const MINIMAX_CARD_CSS = `
 .dsm-minimax-model-id{
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:11px;color:var(--dsw-alias-label-primary,#e6e6e6);
-  overflow-wrap:anywhere;
+  /* 只在长到装不下时才断行；anywhere 在窄容器里会把每个字符都断开竖排。 */
+  overflow-wrap:break-word;white-space:nowrap;
 }
 .dsm-minimax-model-name{
   color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;
@@ -142,7 +143,9 @@ export const MINIMAX_CARD_CSS = `
 .dsm-minimax-chip{
   display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;line-height:16px;
   border:1px solid var(--dsw-alias-border-l2,#36373b);
-  color:var(--dsw-alias-label-secondary,#c6c9d0);background:transparent;white-space:nowrap;
+  color:var(--dsw-alias-label-secondary,#c6c9d0);
+  /* 标签一律不折行：卡片里一行放不下就换行，而不是把一个词拆成竖排。 */
+  white-space:nowrap;
 }
 .dsm-minimax-chip-on{
   border-color:rgba(86,134,254,.4);color:var(--dsw-alias-brand-primary,#5686fe);
@@ -205,20 +208,21 @@ export const MINIMAX_CARD_CSS = `
 /* ---- 条目行（账号 / 模型共用外壳） ---- */
 .dsm-minimax-row{
   display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;
   padding:10px 12px;border-radius:10px;
   border:1px solid var(--dsw-alias-border-l2,#36373b);
   background:var(--dsw-alias-bg-layer-2,#1a1b1f);
 }
 .dsm-minimax-row-off{opacity:.6}
-.dsm-minimax-row-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
-.dsm-minimax-row-side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:none}
+.dsm-minimax-row-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 240px}
+.dsm-minimax-row-side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:none;margin-left:auto}
 .dsm-minimax-row-meta{
   color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;line-height:15px;
   text-align:right;max-width:280px;
 }
-.dsm-minimax-model-check{display:flex;align-items:center;gap:8px;cursor:pointer}
+.dsm-minimax-model-check{display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;white-space:nowrap}
 .dsm-minimax-model-check input{cursor:pointer}
-.dsm-minimax-model-facts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-minimax-model-facts{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-tertiary,#9aa0a8);white-space:nowrap}
 
 /* ---- 积分与签到 ---- */
 .dsm-minimax-credits{
@@ -257,7 +261,7 @@ export const MINIMAX_CARD_CSS = `
   flex-wrap: wrap;
 }
 .dsm-minimax-model-details {
-  flex-basis: 100%;
+  flex: 1 0 100%;
 }
 .dsm-minimax-model-meta {
   display: flex;

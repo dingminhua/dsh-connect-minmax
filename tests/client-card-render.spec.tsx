@@ -18,6 +18,7 @@ import { createRoot, type Root } from 'react-dom/client'
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 import { MiniMaxCard } from '../src/client/MiniMaxCard.tsx'
+import { MINIMAX_CARD_CSS } from '../src/client/styles.ts'
 import type { MiniMaxTranslate } from '../src/client/MiniMaxCard.tsx'
 
 /**
@@ -612,5 +613,32 @@ describe('MiniMaxCard 账号副本渲染', () => {
     const html = container.innerHTML
     expect(html).toContain('provider.minimaxCopy:cfd703e1')
     expect(html).toContain('provider.minimaxCopy:aa11bb22')
+  })
+})
+
+describe('模型行样式与结构一致', () => {
+  it('卡片 CSS 真的匹配渲染出的类名（结构改了样式没跟上是最容易复发的一种坏法）', async () => {
+    mockFetch(payload())
+    await mount(writableScope())
+    await clickPanel('models')
+    // 只断言"规则存在且匹配"，不断言像素：jsdom 没有布局引擎，量不出真实宽度。
+    const style = document.createElement('style')
+    style.textContent = MINIMAX_CARD_CSS
+    document.head.appendChild(style)
+    const row = container.querySelector('.dsm-minimax-row') as HTMLElement
+    const head = row.querySelector('.dsm-minimax-model-head')
+    const tiers = row.querySelector('.dsm-minimax-tiers')
+    const details = row.querySelector('.dsm-minimax-model-details')
+    expect(head).not.toBeNull()
+    expect(tiers).not.toBeNull()
+    expect(details).not.toBeNull()
+    expect(getComputedStyle(head as Element).display).toBe('flex')
+    expect(getComputedStyle(tiers as Element).display).toBe('inline-flex')
+    // 行必须允许换行，否则三段结构会被硬塞进一行、把左侧压到逐字竖排。
+    expect(getComputedStyle(row).flexWrap).toBe('wrap')
+    // 模型 id 不能再是 anywhere——那是逐字竖排的直接原因。
+    // （CSS 里允许 break-word，但必须 nowrap。）
+    expect(getComputedStyle(row.querySelector('.dsm-minimax-model-id') as Element).whiteSpace).toBe('nowrap')
+    style.remove()
   })
 })
