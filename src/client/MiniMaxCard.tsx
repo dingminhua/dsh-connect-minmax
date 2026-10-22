@@ -445,6 +445,33 @@ export function creditsFactOf(
   return `${creditsTextOf(credits, t)} · ${t('diagnostics.readAt', { at })}`
 }
 
+/**
+ * 算出勾选某个模型之后的启用列表。
+ *
+ * 返回 `null` 表示这次操作会把模型关到零个——那不是"用户想要的状态"，而是
+ * 插件把自己关没了（模型选择器里会一个 MiniMax 都不剩）。
+ *
+ * 落盘时按**目录顺序**过滤：`selectModels` 会保留配置里的顺序，用户点两下
+ * 就让模型选择器里的顺序抖一次是很烦人的。另外"全选了"会归一成空列表，
+ * 让上游以后新增的模型自动可见。
+ */
+export function nextModelSelection(
+  status: MiniMaxStatusView,
+  modelId: string,
+  enabled: boolean,
+): string[] | null {
+  const catalog = status.catalog.map(model => model.id)
+  // 空配置 = 全部启用，所以当前集合要从目录取，不能从 models 取（那是空的）。
+  const all = new Set(status.models.length === 0 ? catalog : status.models.map(model => model.id))
+  if (enabled) all.add(modelId)
+  else {
+    if (all.size <= 1) return null
+    all.delete(modelId)
+  }
+  const next = catalog.filter(id => all.has(id))
+  return next.length === catalog.length ? [] : next
+}
+
 /** 一行"键：值"。 */
 function fact(key: string, value: ReactElement | string): ReactElement {
   return (
@@ -755,13 +782,14 @@ function ModelPanel(props: {
   canWrite: boolean
   probes: Record<string, ModelProbe>
   onToggleModel(modelId: string, enabled: boolean): void
+  onSelectAll(): void
   onTest(modelId: string): void
   onLongContext(enabled: boolean): void
   busy: boolean
   message: string | undefined
   t: MiniMaxTranslate
 }): ReactElement {
-  const { status, region, canWrite, probes, onToggleModel, onTest, onLongContext, busy, message, t } = props
+  const { status, region, canWrite, probes, onToggleModel, onSelectAll, onTest, onLongContext, busy, message, t } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
   const routes = routesForRegion(effectiveRoutesOf(status), region)
@@ -789,18 +817,17 @@ function ModelPanel(props: {
             />
             {t('models.longContext')}
           </label>
-          <button
-            type="button"
-            className="dsm-minimax-btn dsm-minimax-btn-ghost"
-            disabled={!canWrite || busy}
-            onClick={() => {
-              // 全选 = 写空列表（宿主语义：空 = 目录全部），这样以后新增的模型
-              // 会自动出现在用户面前，而不是被一次"全选"永久钉死。
-              onToggleModel('__all__', allChecked)
-            }}
-          >
-            {allChecked ? t('models.selectNone') : t('models.selectAll')}
-          </button>
+          {!allChecked && (
+            <button
+              type="button"
+              className="dsm-minimax-btn dsm-minimax-btn-ghost"
+              disabled={!canWrite || busy}
+              title={t('models.selectAllHint')}
+              onClick={onSelectAll}
+            >
+              {t('models.selectAll')}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1040,26 +1067,11 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
 
   const handleToggleModel = useCallback(async (modelId: string, enabled: boolean): Promise<void> => {
     if (settingsScope === undefined || status === undefined) return
-    const current = status.catalog.map(model => model.id)
-    const enabledIds = status.models.map(model => model.id)
-    let next: string[]
-    if (modelId === '__all__') {
-      // 「全选」写空列表（空 = 全部）；「全不选」不允许：那等于把插件自己关没。
-      next = enabled ? [] : current
-    } else {
-      const all = new Set(enabledIds.length === 0 ? current : enabledIds)
-      if (enabled) all.add(modelId)
-      else {
-        if (all.size <= 1) {
-          setActionMessage(translate('models.lastEnabled'))
-          return
-        }
-        all.delete(modelId)
-      }
-      // 按目录顺序落盘：配置里的手动顺序会被 selectModels 保留，抖动一下
-      // 就会让模型选择器里的顺序变来变去。
-      next = current.filter(id => all.has(id))
-      if (next.length === current.length) next = []
+    const next = nextModelSelection(status, modelId, enabled)
+    if (next === null) {
+      // 关到只剩最后一个：不允许，那等于把插件自己关没。
+      setActionMessage(translate('models.lastEnabled'))
+      return
     }
     try {
       await writeModels(settingsScope, next)
@@ -1069,6 +1081,19 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
       setActionMessage(caught instanceof Error ? caught.message : String(caught))
     }
   }, [settingsScope, status, afterWrite, translate])
+
+  const handleSelectAll = useCallback(async (): Promise<void> => {
+    if (settingsScope === undefined || status === undefined) return
+    // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
+    // 会自动出现在用户面前，而不是被一次"全选"永久钉死在旧名单上。
+    try {
+      await writeModels(settingsScope, [])
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, status, afterWrite])
 
   const handleLongContext = useCallback(async (enabled: boolean): Promise<void> => {
     if (settingsScope === undefined) return
@@ -1177,6 +1202,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   canWrite={canWrite}
                   probes={probes}
                   onToggleModel={(id, enabled) => { void handleToggleModel(id, enabled) }}
+                  onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
                   onLongContext={enabled => { void handleLongContext(enabled) }}
                   busy={busy}

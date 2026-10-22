@@ -18,16 +18,23 @@ import {
   effectiveRoutesOf,
   expiryTextOf,
   isCopyRoute,
+  isRegionEnabled,
+  creditsTextOf,
+  creditsFactOf,
+  formatCredits,
   loginAdviceOf,
+  nextModelSelection,
+  routesForRegion,
   providerLabelOf,
   routeAdviceOf,
   routeProviderLabelOf,
   sourceLabelKeyOf,
+  signinDayToneOf,
   worstLoginStateOf,
 } from '../src/client/MiniMaxCard.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import type { MiniMaxSettingsKey } from '../src/client/locales.ts'
-import type { MiniMaxLoginView, MiniMaxRouteView } from '../src/status-paths.ts'
+import type { MiniMaxLoginView, MiniMaxModelView, MiniMaxRouteView, MiniMaxStatusView } from '../src/status-paths.ts'
 
 /** 一个把 key 映射成 "zh:<key>" 的假翻译函数，便于断言用了哪个键。 */
 const t = (key: string): string => `zh:${key}`
@@ -418,5 +425,140 @@ describe('routeAdviceOf 账号副本', () => {
   it('本机登录的过期建议不受副本分支影响', () => {
     expect(routeAdviceOf(routeOf('minimax', 'cn', alive), tp)).toBe('zh:advice.cn.expired')
     expect(routeAdviceOf(routeOf('minimax-global', 'global', alive), tp)).toBe('zh:advice.global.expired')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 模型勾选：算出"下一个启用列表"
+// ---------------------------------------------------------------------------
+
+/** 造一份带目录与启用列表的状态视图。 */
+function statusOf(options: {
+  catalog: string[]
+  enabled: string[]
+  regions?: string[]
+}): MiniMaxStatusView {
+  const model = (id: string): MiniMaxModelView => ({
+    id,
+    name: id,
+    contextWindow: 512_000,
+    maxTokens: 128_000,
+    input: ['text'],
+    reasoning: true,
+    thinkingMode: 'switchable',
+  })
+  return {
+    ok: true,
+    route: 'minimax',
+    region: 'cn',
+    regionLabel: '国内版',
+    baseUrl: 'https://cn.example/api',
+    login: { state: 'ready', source: 'lease' },
+    routes: [],
+    models: options.enabled.map(model),
+    catalog: options.catalog.map(model),
+    enabledRegions: options.regions ?? ['cn', 'global'],
+    longContext: false,
+    pluginVersion: '0.1.0',
+    checkedAt: 0,
+  }
+}
+
+describe('nextModelSelection', () => {
+  const CATALOG = ['MiniMax-M3.1-Flash', 'MiniMax-M3', 'MiniMax-M2.7']
+
+  it('空配置=全部启用：关掉其中一个时，从目录而不是空的 models 起算', () => {
+    // models 是空的（宿主按"全部"注册），若误从 models 取当前集合，
+    // 关一个之后会剩零个 —— 用户点一下就把插件关没了。
+    const next = nextModelSelection(statusOf({ catalog: CATALOG, enabled: [] }), 'MiniMax-M3', false)
+    expect(next).toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M2.7'])
+  })
+
+  it('勾上一个未启用的模型', () => {
+    const next = nextModelSelection(statusOf({ catalog: CATALOG, enabled: ['MiniMax-M3'] }), 'MiniMax-M2.7', true)
+    expect(next).toEqual(['MiniMax-M3', 'MiniMax-M2.7'])
+  })
+
+  it('落盘顺序按目录，不按点击顺序', () => {
+    // 先勾后面的、再勾前面的：配置里仍是目录顺序，模型选择器不会因点击顺序抖动。
+    const status = statusOf({ catalog: CATALOG, enabled: ['MiniMax-M2.7'] })
+    expect(nextModelSelection(status, 'MiniMax-M3.1-Flash', true)).toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M2.7'])
+  })
+
+  it('选满全部时归一成空列表，让上游以后新增的模型自动可见', () => {
+    const next = nextModelSelection(statusOf({ catalog: CATALOG, enabled: ['MiniMax-M3'] }), 'MiniMax-M3.1-Flash', true)
+    // 还差 M2.7，不该是空；顺序按目录（M3.1-Flash 在 M3 之前）。
+    expect(next).toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M3'])
+    const full = nextModelSelection(
+      statusOf({ catalog: CATALOG, enabled: ['MiniMax-M3', 'MiniMax-M2.7'] }),
+      'MiniMax-M3.1-Flash',
+      true,
+    )
+    expect(full).toEqual([])
+  })
+
+  it('拒绝关到零个：返回 null 让调用方给提示', () => {
+    const next = nextModelSelection(statusOf({ catalog: CATALOG, enabled: ['MiniMax-M3'] }), 'MiniMax-M3', false)
+    expect(next).toBeNull()
+  })
+
+  it('空配置下关掉倒数第二个仍然合法（此刻实际启用着三个）', () => {
+    const next = nextModelSelection(statusOf({ catalog: CATALOG, enabled: [] }), 'MiniMax-M3.1-Flash', false)
+    expect(next).toEqual(['MiniMax-M3', 'MiniMax-M2.7'])
+  })
+})
+
+describe('isRegionEnabled / routesForRegion', () => {
+  const live = routeOf('minimax', 'cn', { state: 'ready', source: 'lease' })
+  const copy = { ...routeOf('minimax-cn-aaa', 'cn', { state: 'ready', source: 'file' }), accountId: 'cn-aaa' }
+  const globalLive = routeOf('minimax-global', 'global', { state: 'missing', source: 'none' })
+
+  it('未列出的区域算关闭', () => {
+    expect(isRegionEnabled(statusOf({ catalog: [], enabled: [], regions: ['cn'] }), 'global')).toBe(false)
+    expect(isRegionEnabled(statusOf({ catalog: [], enabled: [], regions: ['cn'] }), 'cn')).toBe(true)
+  })
+
+  it('同一区域里本机登录在前、副本在后', () => {
+    const ordered = routesForRegion([copy, globalLive, live], 'cn')
+    expect(ordered.map(route => route.route)).toEqual(['minimax', 'minimax-cn-aaa'])
+  })
+
+  it('另一侧的区域不会混进来', () => {
+    expect(routesForRegion([copy, live, globalLive], 'global').map(route => route.route)).toEqual(['minimax-global'])
+  })
+})
+
+describe('积分与签到的展示换算', () => {
+  it('整数不显示成 400.00，小数才保留', () => {
+    expect(formatCredits(400)).toBe('400')
+    expect(formatCredits(399.989)).toBe('399.99')
+  })
+
+  it('余额读不到时用上游原因，而不是显示 0', () => {
+    const tp = (key: string) => `zh:${key}`
+    expect(creditsTextOf({ error: 'HTTP 401' }, tp)).toBe('HTTP 401')
+    expect(creditsTextOf(undefined, tp)).toBe('zh:credits.unavailable')
+    expect(creditsTextOf({ balance: { totalRemaining: 400, freeRemaining: 400, purchasedRemaining: 0 } }, tp))
+      .toBe('400 zh:credits.unit')
+  })
+
+  it('诊断页的"积分读取于"给出真实读取时间', () => {
+    const tp = (key: string, params?: Record<string, unknown>) => `zh:${key}${params?.['at'] === undefined ? '' : `@${String(params['at'])}`}`
+    const line = creditsFactOf(
+      { balance: { totalRemaining: 400, freeRemaining: 400, purchasedRemaining: 0 }, atMs: 1_700_000_000_000 },
+      0,
+      tp,
+    )
+    expect(line).toContain('zh:diagnostics.readAt@')
+    // 没有 atMs 时退回状态读取时间，不能显示 1970。
+    expect(creditsFactOf({ balance: { totalRemaining: 1, freeRemaining: 1, purchasedRemaining: 0 } }, 1_700_000_000_000, tp))
+      .toContain('zh:diagnostics.readAt@')
+  })
+
+  it('签到状态四值：只有 2 是"今天可以领"', () => {
+    expect(signinDayToneOf({ status: 3 })).toBe('claimed')
+    expect(signinDayToneOf({ status: 2 })).toBe('claimable')
+    expect(signinDayToneOf({ status: 1 })).toBe('upcoming')
+    expect(signinDayToneOf({ status: 4 })).toBe('upcoming')
   })
 })
