@@ -247,6 +247,8 @@ export interface MiniMaxStatusRouteDeps {
    * `auth.inspect()`（本机登录）时完全不可见。
    */
   pool?: () => PoolSnapshot
+  /** 活凭据自续期状态（mcode 关着时由插件续）。 */
+  renewal?: () => Promise<import('./renewal.ts').RenewalStatusView>
   /**
    * 把读到的最新余额回灌给账号池。
    *
@@ -548,6 +550,7 @@ export async function buildMiniMaxStatus(
       ...account?.credits === undefined ? {} : { credits: account.credits },
       ...account?.signin === undefined ? {} : { signin: account.signin },
       ...entry.pool === undefined ? {} : { pool: entry.pool() },
+      ...entry.renewal === undefined ? {} : { renewal: await entry.renewal() },
     }
   }))
   const primary = routes[0] ?? {

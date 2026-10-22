@@ -44,6 +44,7 @@ import {
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
 import { invalidateAccountCache, registerMiniMaxStatusRoute } from './status.ts'
+import { LiveRenewal } from './renewal.ts'
 import { looksLikeOurNamespace, unwrapVolatileDeep } from './status-paths.ts'
 import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } from './status.ts'
 import {
@@ -154,6 +155,7 @@ export interface MiniMaxConfig {
   modelImages?: Record<string, boolean>
   modelThinkingOff?: Record<string, boolean>
   poolDisabled?: string[]
+  selfRenewal?: boolean
   reasoningEffort?: string
 }
 
@@ -190,6 +192,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .union(MINIMAX_REASONING_EFFORTS.map(level => z.const(level)))
     .default('medium')
     .description('宿主未指定档位时的默认思考强度（provider 级：pi-ai 没有"每模型默认档"这个概念）。'),
+  selfRenewal: z
+    .boolean()
+    .default(true)
+    .description('MiniMax Code 关闭时由插件自续活凭据（按官方客户端的锁/代际协议写回 ~/.minimax）；关闭则本机登录号依赖 MiniMax Code 在线续期。'),
   poolDisabled: z
     .array(z.string())
     .default([])
@@ -454,6 +460,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   /** 本机登录（每个区域一条），也是镜像"当前账号"的来源。 */
   const liveAuths = new Map<MiniMaxRegion, MiniMaxAuth>()
+  const renewals = new Map<MiniMaxRegion, LiveRenewal>()
   /** 每个区域的账号池；区域路由的凭据面就是它。 */
   const regionPools = new Map<MiniMaxRegion, MiniMaxAccountPool>()
   /** 每个区域的本机登录候选（池里的第一个）。 */
@@ -480,6 +487,9 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
   for (const region of requestedRegions) {
     const route = routeForRegion(region)
     const auth = new MiniMaxAuth({ region })
+    // 活凭据自续期：mcode 关着时由插件按官方协议续。每区域一个调度器。
+    const renewal = new LiveRenewal(auth.authJsonPath, config.selfRenewal !== false)
+    renewals.set(region, renewal)
     const configured = region === 'global' ? config.globalBaseUrl : config.baseUrl
     const baseUrl = effectiveBaseUrl(configured, regionBaseUrl(region))
 
@@ -515,6 +525,9 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     if (registration === undefined) continue
 
     liveAuths.set(region, auth)
+    renewal.start()
+    // 巡检随插件 fiber 拆除：插件停转后不许再有后台定时器碰用户的凭据文件。
+    ctx.effect(() => () => { renewal.stop() }, `dsh-connect-minmax: renewal patrol (${region})`)
     ctx.logger?.info(
       `dsh-connect-minmax: 已注册 provider "${route}"（${displayNameForRegion(region)}，`
       + `${models.length} 个模型，区域 ${auth.regionLabel}，baseUrl ${baseUrl}）`,
@@ -528,6 +541,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       // 积分/签到走同一个 Bearer；用**池**取 token，读到的就是当前生效账号的账。
       accountToken: signal => pool.token(signal),
       pool: () => pool.describe(),
+      renewal: () => renewal.status(),
       // 余额回灌：读到就把"当前账号还有没有钱"告诉池，下一次选号立刻用上。
       reportCredits: (totalRemaining) => {
         const active = pool.active

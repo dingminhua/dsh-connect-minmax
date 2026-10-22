@@ -212,8 +212,18 @@ export interface MiniMaxRouteView {
   accountId?: string
   /** 该区域的账号池；旧版本应答没有这个字段。 */
   pool?: MiniMaxPoolView
+  /** 活凭据自续期状态；旧版本应答没有这个字段。 */
+  renewal?: MiniMaxRenewalView
   credits?: MiniMaxCreditsView
   signin?: MiniMaxSigninView
+}
+
+/** 活凭据自续期状态。 */
+export interface MiniMaxRenewalView {
+  state: 'enabled' | 'renewing' | 'paused' | 'fatal' | 'off'
+  retryAtMs?: number
+  reason?: string
+  expiresAtMs?: number
 }
 
 /** 已保存的逐模型覆盖值（卡片草稿的基线）。 */
@@ -416,10 +426,12 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     const credits = parseCredits(row['credits'])
     const signin = parseSignin(row['signin'])
     const pool = parsePool(row['pool'])
+    const renewal = parseRenewal(row['renewal'])
     routes.push({
       route,
       ...accountId === undefined ? {} : { accountId },
       ...pool === undefined ? {} : { pool },
+    ...renewal === undefined ? {} : { renewal },
       ...credits === undefined ? {} : { credits },
       ...signin === undefined ? {} : { signin },
       region: row['region'] === 'global' ? 'global' : 'cn',
@@ -561,6 +573,22 @@ function parsePool(value: unknown): MiniMaxPoolView | undefined {
   if (accounts.length === 0) return undefined
   const active = stringOf(row['active'])
   return { accounts, ...active === undefined ? {} : { active } }
+}
+
+/** 解析续期状态段；形状不符就整段丢弃。 */
+function parseRenewal(value: unknown): MiniMaxRenewalView | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  const state = row['state']
+  if (state !== 'enabled' && state !== 'renewing' && state !== 'paused' && state !== 'fatal' && state !== 'off') return undefined
+  const view: MiniMaxRenewalView = { state }
+  const retry = finiteNumberOf(row['retryAtMs'])
+  if (retry !== undefined) view.retryAtMs = retry
+  const reason = stringOf(row['reason'])
+  if (reason !== undefined) view.reason = reason
+  const expires = finiteNumberOf(row['expiresAtMs'])
+  if (expires !== undefined) view.expiresAtMs = expires
+  return view
 }
 
 /** 解析积分概览：任何形状不符就整段丢弃（宁可不显示，也不显示半个数字）。 */
