@@ -387,23 +387,30 @@ describe('MiniMaxCard 账号副本渲染', () => {
       ],
     }))
     await mount()
-    const html = container.innerHTML
     // 供应商列：MiniMax 副本 · cfd703e1（t 把 label 拼在键后面）。
-    expect(html).toContain('provider.minimaxCopy:cfd703e1')
-    // 本机登录那两行不受影响。
-    expect(html).toContain('provider.minimax')
-    expect(html).toContain('provider.minimaxGlobal')
-    // 「副本」角标只出现在副本行，且复用现有 chip 样式（styles.ts 不在改动范围内）。
-    expect(html).toContain('routes.copy')
-    expect(html).toContain('dsm-minimax-chip dsm-minimax-chip-on')
-    expect(html).toContain('minimax-cn-cfd703e1')
+    const copyCells = rowCellsOf('minimax-cn-cfd703e1')
+    expect(copyCells[0] ?? '').toContain('provider.minimaxCopy:cfd703e1')
+    // 区域列：区域名 + 角标，两者都在**同一格**里（追加在区域后面，不是新列）。
+    expect(copyCells[1] ?? '').toContain('region.cn')
+    expect(copyCells[1] ?? '').toContain('routes.copy')
+    // 本机登录的两行不受影响：供应商名沿用旧的，区域列里没有角标。
+    const localCells = rowCellsOf('minimax')
+    expect(localCells[0] ?? '').toContain('provider.minimax')
+    expect(localCells[0] ?? '').not.toContain('provider.minimaxCopy')
+    expect(localCells[1] ?? '').not.toContain('routes.copy')
+    const globalCells = rowCellsOf('minimax-global')
+    expect(globalCells[0] ?? '').toContain('provider.minimaxGlobal')
+    expect(globalCells[1] ?? '').not.toContain('routes.copy')
   })
 
   it('本机登录行没有「副本」角标，也没有副本供应商名', async () => {
     mockFetch(payload())
     await mount()
+    for (const route of ['minimax', 'minimax-global']) {
+      const cells = rowCellsOf(route)
+      expect(cells[1] ?? '', route).not.toContain('routes.copy')
+    }
     const html = container.innerHTML
-    expect(html).not.toContain('routes.copy')
     expect(html).not.toContain('provider.minimaxCopy')
     expect(html).not.toContain('provider.minimaxGlobalCopy')
   })
@@ -411,7 +418,8 @@ describe('MiniMaxCard 账号副本渲染', () => {
   it('有副本时，路由表下方给出说明；没有副本时不给（免得让人以为漏配）', async () => {
     mockFetch(payload({ routes: [copyRoute({ short: 'cfd703e1', region: 'cn', login: { state: 'ready', source: 'file' } })] }))
     await mount()
-    expect(container.innerHTML).toContain('routes.copyHint')
+    // 说明语挂在**路由表下方**，而不是别处的 hint 段落里。
+    expect(copyHintText()).toContain('routes.copyHint')
 
     // 换一份"没有副本"的应答：重新挂载同一棵树，说明语应当消失。
     act(() => { root.unmount() })
@@ -419,6 +427,7 @@ describe('MiniMaxCard 账号副本渲染', () => {
     mockFetch(payload())
     await mount()
     expect(container.innerHTML).not.toContain('routes.copyHint')
+    expect(copyHintText()).toBe('')
   })
 
   it('国际版副本用国际版那份供应商文案', async () => {
