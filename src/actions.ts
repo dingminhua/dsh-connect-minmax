@@ -30,6 +30,7 @@ import { invalidateAccountCache, isLoopbackRequest, json, safeMessage } from './
  * 路径，而两边都"有常量"、都不报错。单一出处就是为了避免这种沉默的不一致。
  */
 import {
+  MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_MODEL_TEST_PATH,
@@ -37,6 +38,7 @@ import {
 } from './status-paths.ts'
 
 export {
+  MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_MODEL_TEST_PATH,
@@ -63,6 +65,13 @@ export interface MiniMaxActionDeps {
    * @returns 切换成功返回 `true`；该区域池里没有这个 id 返回 `false`。
    */
   selectAccount?(region: MiniMaxRegion, id: string): Promise<boolean>
+  /**
+   * 重新读取本机登录态、账号副本与积分缓存。
+   *
+   * 卡片上的「刷新」按钮用它：浏览器端重拉状态只会拿到**缓存里的**旧读数，
+   * 真正要重新读的是盘上凭据与上游积分——那些只有宿主侧能做。
+   */
+  refreshAccount?(region: MiniMaxRegion): Promise<void>
   /** 日志面（可选）。 */
   log?: (message: string) => void
 }
@@ -228,6 +237,27 @@ export function registerMiniMaxActionRoutes(
         const ok = await deps.selectAccount(region, id)
         if (!ok) return json(res, 404, { error: `账号池里没有 ${id}。` })
         return json(res, 200, { ok: true, active: id })
+      } catch (error: unknown) {
+        return json(res, 500, { error: safeMessage(error) })
+      }
+    },
+  }))
+
+  // ---------------------------------------------------------------
+  // POST /account/refresh —— 重新读取本机登录态、账号副本与积分
+  // ---------------------------------------------------------------
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_ACCOUNT_REFRESH_PATH,
+    handler: async (req, res) => {
+      const body = await guardPost(req, res)
+      if (body === undefined) return
+      const region = regionOf(body['region'])
+      if (region === undefined) return json(res, 400, { error: 'region must be cn or global' })
+      if (deps.refreshAccount === undefined) return json(res, 501, { error: '刷新不可用。' })
+      try {
+        await deps.refreshAccount(region)
+        return json(res, 200, { ok: true })
       } catch (error: unknown) {
         return json(res, 500, { error: safeMessage(error) })
       }

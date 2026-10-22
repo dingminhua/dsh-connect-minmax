@@ -25,6 +25,8 @@ export const MINIMAX_ACCOUNT_REMOVE_PATH = '/plugins/dsh-connect-minmax/account/
 export const MINIMAX_MODEL_TEST_PATH = '/plugins/dsh-connect-minmax/model/test'
 /** 把池里某个账号设为当前账号。 */
 export const MINIMAX_ACCOUNT_SELECT_PATH = '/plugins/dsh-connect-minmax/account/select'
+/** 重新读取本机登录态、账号副本与积分缓存。 */
+export const MINIMAX_ACCOUNT_REFRESH_PATH = '/plugins/dsh-connect-minmax/account/refresh'
 
 /** 本插件注册的 LLM 路由名。 */
 export const MINIMAX_ROUTE = 'minimax'

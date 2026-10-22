@@ -162,6 +162,12 @@ check('缺 id 回 400', selectNoId.status === 400)
 const selectLive = await post('/plugins/dsh-connect-minmax/account/select', { id: 'live', region: 'cn' })
 check('切到本机登录成功', selectLive.status === 200 && selectLive.body.active === 'live', JSON.stringify(selectLive.body))
 
+console.log('\n== POST /account/refresh ==')
+const refreshOk = await post('/plugins/dsh-connect-minmax/account/refresh', { region: 'cn' })
+check('刷新重读凭据与积分成功', refreshOk.status === 200 && refreshOk.body.ok === true, JSON.stringify(refreshOk.body))
+const refreshBad = await post('/plugins/dsh-connect-minmax/account/refresh', { region: 'mars' })
+check('非法 region 回 400', refreshBad.status === 400)
+
 console.log('\n== POST /signin/claim ==')
 if (!wantClaim) {
   console.log('  – 跳过（加 --claim 才会真的领当天积分）')

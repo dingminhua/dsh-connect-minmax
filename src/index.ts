@@ -43,7 +43,7 @@ import {
 } from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
-import { registerMiniMaxStatusRoute } from './status.ts'
+import { invalidateAccountCache, registerMiniMaxStatusRoute } from './status.ts'
 import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } from './status.ts'
 import {
   accountDisplayNameOf,
@@ -619,6 +619,20 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         const auth = liveAuths.get(region)
         if (auth === undefined) throw new Error(`本机没有注册${region === 'global' ? '国际版' : '国内版'}的登录路由。`)
         return auth.token(signal)
+      },
+      refreshAccount: async (region) => {
+        // 刷新要真的重新读一遍，而不是让浏览器端重拉缓存：
+        //  - 丢掉本机凭据的缓存（它 1 小时才过期，用户刚在 mcode 里换了登录）
+        //  - 丢掉积分/签到的 60 秒缓存
+        //  - 重新镜像本机登录、重算账号池
+        const auth = liveAuths.get(region)
+        auth?.invalidate()
+        invalidateAccountCache(routeForRegion(region))
+        for (const account of readAccountsSync()) {
+          invalidateAccountCache(accountRouteOf(account))
+        }
+        await mirrorLive()
+        reconcileAccounts()
       },
       selectAccount: async (region, id) => {
         const pool = regionPools.get(region)

@@ -41,6 +41,7 @@ import {
   expiryBucketOf,
   formatContextWindow,
   MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_CARD_KEYS,
   MINIMAX_DISPLAY_NAME,
@@ -868,9 +869,9 @@ function ModelPanel(props: {
             type="button"
             className="dsm-minimax-btn dsm-minimax-btn-outline"
             disabled={busy}
-            onClick={onRefresh}
+            onClick={() => { onRefresh() }}
           >
-            {t('models.refresh')}
+            {busy ? t('models.refreshing') : t('models.refresh')}
           </button>
           {!allChecked && (
             <button
@@ -1244,6 +1245,24 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [settingsScope, afterWrite])
 
+  const handleRefresh = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const outcome = await postAction(MINIMAX_ACCOUNT_REFRESH_PATH, { region })
+      if (!outcome.ok) {
+        setActionMessage(outcome.message)
+      } else {
+        setActionMessage(undefined)
+      }
+      // 动作已经让宿主重读过了，这里再拉一次拿最新读数。
+      await load()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setBusy(false)
+    }
+  }, [region, load])
+
   const handleSelectAll = useCallback(async (): Promise<void> => {
     if (settingsScope === undefined || status === undefined) return
     // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
@@ -1359,7 +1378,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   onThinkingOff={(id, allow) => { void handleThinkingOff(id, allow) }}
                   onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
-                  onRefresh={() => { void load() }}
+                  onRefresh={() => { void handleRefresh() }}
                   busy={busy}
                   message={actionMessage}
                   t={translate}

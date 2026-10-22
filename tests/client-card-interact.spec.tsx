@@ -18,6 +18,7 @@ import { MiniMaxCard } from '../src/client/MiniMaxCard.tsx'
 import type { MiniMaxTranslate } from '../src/client/MiniMaxCard.tsx'
 import {
   MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
   MINIMAX_STATUS_PATH,
@@ -354,6 +355,20 @@ describe('账号页动作', () => {
     expect(html).toContain('credits.balance')
     expect(html).toContain('400')
     expect(html).toContain('credits.lots')
+  })
+})
+
+describe('刷新', () => {
+  it('点「刷新状态」走服务端动作（真正重读凭据与积分），不是只重拉缓存', async () => {
+    mockRoutes({ status: () => statusPayload() })
+    await mount(recordingScope(() => statusPayload()))
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'models.refresh')
+    expect(button).toBeDefined()
+    await act(async () => { button?.click() })
+    await settle()
+    const call = posted.find(entry => entry.path === MINIMAX_ACCOUNT_REFRESH_PATH)
+    expect(call?.body).toEqual({ region: 'cn' })
   })
 })
 
