@@ -22,6 +22,8 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import type { PoolSnapshot } from './pool.ts'
+
 import {
   buildCreditSnapshot,
   fetchCreditBalance,
@@ -215,6 +217,20 @@ export interface MiniMaxStatusRouteDeps {
    * 抛错或超时都只让 `credits` 缺席，不影响登录态与模型通路。
    */
   accountToken?: (signal?: AbortSignal) => Promise<string>
+  /**
+   * 这个区域的账号池快照。
+   *
+   * 卡片要靠它回答"池里有几个号、现在用哪个、谁积分用完了"——这三件事在只看
+   * `auth.inspect()`（本机登录）时完全不可见。
+   */
+  pool?: () => PoolSnapshot
+  /**
+   * 把读到的最新余额回灌给账号池。
+   *
+   * 这是"积分没了自动切"的**主动**触发点：请求前就知道当前号没钱，直接跳过，
+   * 不必先发一次注定失败的请求。读不到余额时不调用，池就按"未知即可用"处理。
+   */
+  reportCredits?: (totalRemaining: number) => void
   region: MiniMaxStatusRegion
   regionLabel: string
   baseUrl: string
@@ -412,7 +428,13 @@ async function readAccountInfo(
 ): Promise<AccountRead | undefined> {
   if (entry.accountToken === undefined) return undefined
   const cached = accountCache.get(entry.route)
-  if (cached !== undefined && nowMs - cached.atMs < ACCOUNT_CACHE_MS) return cached
+  if (cached !== undefined && nowMs - cached.atMs < ACCOUNT_CACHE_MS) {
+    // 缓存命中也要回灌：池的"够不够用"判断不该因为缓存而停在旧值上。
+    if (entry.reportCredits !== undefined && cached.credits?.balance !== undefined) {
+      entry.reportCredits(cached.credits.balance.totalRemaining)
+    }
+    return cached
+  }
 
   const token = await entry.accountToken().catch(() => undefined)
   if (token === undefined) return undefined
@@ -432,6 +454,10 @@ async function readAccountInfo(
   const creditError = balance.ok
     ? (lots.ok ? undefined : lots.error)
     : (balance.error ?? '积分余额读取失败。')
+  // 回灌给账号池：读到余额就立刻影响"下次用哪个号"的判断。
+  if (entry.reportCredits !== undefined && snapshot.balance !== undefined) {
+    entry.reportCredits(snapshot.balance.totalRemaining)
+  }
   const read: AccountRead = {
     atMs: nowMs,
     credits: {
@@ -481,6 +507,7 @@ export async function buildMiniMaxStatus(
       ...entry.accountId === undefined ? {} : { accountId: entry.accountId },
       ...account?.credits === undefined ? {} : { credits: account.credits },
       ...account?.signin === undefined ? {} : { signin: account.signin },
+      ...entry.pool === undefined ? {} : { pool: entry.pool() },
     }
   }))
   const primary = routes[0] ?? {

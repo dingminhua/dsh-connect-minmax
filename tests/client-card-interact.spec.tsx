@@ -18,6 +18,7 @@ import { MiniMaxCard } from '../src/client/MiniMaxCard.tsx'
 import type { MiniMaxTranslate } from '../src/client/MiniMaxCard.tsx'
 import {
   MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
   MINIMAX_STATUS_PATH,
 } from '../src/status-paths.ts'
@@ -26,7 +27,9 @@ import type { MiniMaxSettingsScope } from '../src/client/settings.ts'
 const t: MiniMaxTranslate = (key, params) => {
   const code = params?.['code']
   const label = params?.['label']
+  const amount = params?.['amount']
   if (code !== undefined) return `${key}:${String(code)}`
+  if (amount !== undefined) return `${key}:${String(amount)}`
   return label === undefined ? key : `${key}:${String(label)}`
 }
 
@@ -348,6 +351,69 @@ describe('账号页动作', () => {
     expect(html).toContain('credits.balance')
     expect(html).toContain('400')
     expect(html).toContain('credits.lots')
+  })
+})
+
+describe('账号池', () => {
+  const withPool = (): Record<string, unknown> => statusPayload({
+    routes: [
+      liveRoute({
+        pool: {
+          active: 'live',
+          accounts: [
+            { id: 'live', label: '本机登录', live: true, active: true, balance: 0 },
+            { id: 'cn-aaaa1111', label: '副本 1', live: false, active: false, balance: 320 },
+          ],
+        },
+      }),
+    ],
+  })
+
+  it('池里有两个号时列出它们，标出谁在用、各自多少积分', async () => {
+    mockRoutes({ status: withPool })
+    await mount(recordingScope(withPool))
+    const html = container.innerHTML
+    expect(html).toContain('pool.title')
+    expect(html).toContain('本机登录')
+    expect(html).toContain('pool.active')
+    expect(html).toContain('320')
+  })
+
+  it('点「用这个号」→ POST account/select 带 region 与 id', async () => {
+    mockRoutes({ status: withPool })
+    await mount(recordingScope(withPool))
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'pool.setActive')
+    expect(button).toBeDefined()
+    await act(async () => { button?.click() })
+    await settle()
+    const call = posted.find(entry => entry.path === MINIMAX_ACCOUNT_SELECT_PATH)
+    expect(call?.body).toEqual({ region: 'cn', id: 'cn-aaaa1111' })
+  })
+
+  it('只有一个账号时不画池区块（那只是一个账号，谈不上"池"）', async () => {
+    const single = statusPayload({
+      routes: [liveRoute({ pool: { active: 'live', accounts: [{ id: 'live', label: '本机登录', live: true, active: true }] } })],
+    })
+    mockRoutes({ status: () => single })
+    await mount(recordingScope(() => single))
+    expect(container.innerHTML).not.toContain('pool.title')
+  })
+
+  it('积分已用尽的号带标记（用户能看出为什么换了号）', async () => {
+    const drained = statusPayload({
+      routes: [liveRoute({
+        pool: {
+          active: 'cn-aaaa1111',
+          accounts: [
+            { id: 'live', label: '本机登录', live: true, active: false, drainedUntilMs: Date.now() + 600000 },
+            { id: 'cn-aaaa1111', label: '副本 1', live: false, active: true, balance: 12 },
+          ],
+        },
+      })],
+    })
+    mockRoutes({ status: () => drained })
+    await mount(recordingScope(() => drained))
+    expect(container.innerHTML).toContain('pool.drained')
   })
 })
 

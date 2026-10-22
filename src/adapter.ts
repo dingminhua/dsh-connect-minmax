@@ -318,11 +318,16 @@ export class MiniMaxAdapter extends PiAiAdapter {
 
   /** 每次调用现建：`super.stream()` 每次都会取自己的快照，重试即新快照。 */
   private guard(): GuardStreamContext {
+    // 池化来源（`MiniMaxAccountPool`）多一个"换号"能力；单账号来源没有它，
+    // 于是 `switchAccount` 缺省，行为与以前完全一致。
+    const pooled = this.auth as MiniMaxCredentialSource & { switchAway?: () => boolean }
+    const switchAway = pooled.switchAway
     return {
       acquire: () => this.auth.token(),
       invalidate: () => {
         this.auth.invalidate()
       },
+      ...typeof switchAway === 'function' ? { switchAccount: () => switchAway.call(pooled) } : {},
     }
   }
 }

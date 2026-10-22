@@ -22,9 +22,26 @@ import { readAccounts, writeAccounts } from './accounts.ts'
 import { isLoopbackRequest, json, safeMessage } from './status.ts'
 
 /** 动作路由的挂载点。 */
-export const MINIMAX_SIGNIN_CLAIM_PATH = '/plugins/dsh-connect-minmax/signin/claim'
-export const MINIMAX_ACCOUNT_REMOVE_PATH = '/plugins/dsh-connect-minmax/account/remove'
-export const MINIMAX_MODEL_TEST_PATH = '/plugins/dsh-connect-minmax/model/test'
+
+/**
+ * 动作路径统一由 `status-paths.ts` 定义后转出。
+ *
+ * 曾经两个文件各写一份字符串：改一处忘另一处就会让卡片 POST 到一个不存在的
+ * 路径，而两边都"有常量"、都不报错。单一出处就是为了避免这种沉默的不一致。
+ */
+import {
+  MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_SELECT_PATH,
+  MINIMAX_MODEL_TEST_PATH,
+  MINIMAX_SIGNIN_CLAIM_PATH,
+} from './status-paths.ts'
+
+export {
+  MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_SELECT_PATH,
+  MINIMAX_MODEL_TEST_PATH,
+  MINIMAX_SIGNIN_CLAIM_PATH,
+}
 
 /** 请求体上限：这些动作只带一个 id 或一个模型名。 */
 const MAX_BODY_BYTES = 8_192
@@ -40,6 +57,12 @@ export interface MiniMaxActionDeps {
    * （baseUrl、鉴权头、思考档位），在这里重造一份就等于测了个假链路。
    */
   testModel(route: string, model: string, signal?: AbortSignal): Promise<MiniMaxModelTestResult>
+  /**
+   * 把池里某个账号设为某区域的当前账号。
+   *
+   * @returns 切换成功返回 `true`；该区域池里没有这个 id 返回 `false`。
+   */
+  selectAccount?(region: MiniMaxRegion, id: string): Promise<boolean>
   /** 日志面（可选）。 */
   log?: (message: string) => void
 }
@@ -172,6 +195,33 @@ export function registerMiniMaxActionRoutes(
         await writeAccounts(accounts.filter(account => account.id !== id))
         deps.log?.(`removed account copy ${id} (${target.region}, owned=${target.owned})`)
         return json(res, 200, { ok: true, removed: id })
+      } catch (error: unknown) {
+        return json(res, 500, { error: safeMessage(error) })
+      }
+    },
+  }))
+
+  // ---------------------------------------------------------------
+  // POST /account/select —— 把池里某个账号设为当前账号
+  // ---------------------------------------------------------------
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_ACCOUNT_SELECT_PATH,
+    handler: async (req, res) => {
+      const body = await guardPost(req, res)
+      if (body === undefined) return
+      const id = stringOf(body['id'])
+      const region = body['region'] === 'global' ? 'global' : body['region'] === 'cn' ? 'cn' : undefined
+      if (id === undefined || region === undefined) {
+        return json(res, 400, { error: 'id and region are required' })
+      }
+      if (deps.selectAccount === undefined) {
+        return json(res, 501, { error: '账号池不可用。' })
+      }
+      try {
+        const ok = await deps.selectAccount(region, id)
+        if (!ok) return json(res, 404, { error: `账号池里没有 ${id}。` })
+        return json(res, 200, { ok: true, active: id })
       } catch (error: unknown) {
         return json(res, 500, { error: safeMessage(error) })
       }

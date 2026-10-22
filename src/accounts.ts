@@ -145,13 +145,71 @@ export function readAccountsSync(path: string = minimaxAccountsPath()): MiniMaxS
 }
 
 /** 原子写入副本库（0600）；写失败不抛给调用方之外的地方 —— 它只影响"下次能不能续期"。 */
+/** 每个区域当前选中的池内账号 id（`live` 或副本 id）。 */
+export type MiniMaxActiveMap = Partial<Record<MiniMaxRegion, string>>
+
+/**
+ * 读"当前选中的账号"。
+ *
+ * 单独存一份而不是从账号列表推导：用户手动切到副本之后，重启还要记住，
+ * 否则每次启动都回到"本机登录优先"，那等于切换白做了。
+ */
+export function readActiveSelections(path: string = minimaxAccountsPath()): MiniMaxActiveMap {
+  let raw: string
+  try {
+    raw = readFileSync(path, 'utf8')
+  } catch {
+    return {}
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (typeof parsed !== 'object' || parsed === null) return {}
+  const active = (parsed as Record<string, unknown>)['activeByRegion']
+  if (typeof active !== 'object' || active === null || Array.isArray(active)) return {}
+  const result: MiniMaxActiveMap = {}
+  for (const region of ['cn', 'global'] as const) {
+    const id = (active as Record<string, unknown>)[region]
+    if (typeof id === 'string' && id !== '') result[region] = id
+  }
+  return result
+}
+
+/** 记住某个区域当前选中的账号。 */
+export async function writeActiveSelection(
+  region: MiniMaxRegion,
+  id: string,
+  path: string = minimaxAccountsPath(),
+): Promise<void> {
+  const accounts = readAccountsSync(path)
+  const activeByRegion = { ...readActiveSelections(path), [region]: id }
+  await writeStore({ accounts, activeByRegion }, path)
+}
+
 export async function writeAccounts(
   accounts: readonly MiniMaxStoredAccount[],
   path: string = minimaxAccountsPath(),
 ): Promise<void> {
+  // 写账号列表时把"当前选中的账号"一并带上——否则一次更换账号就会把用户
+  // 手动做的切换顺手清掉。
+  await writeStore({ accounts, activeByRegion: readActiveSelections(path) }, path)
+}
+
+/** 原子写整个存储文档。 */
+async function writeStore(
+  doc: { accounts: readonly MiniMaxStoredAccount[], activeByRegion: MiniMaxActiveMap },
+  path: string,
+): Promise<void> {
   await mkdir(join(path, '..'), { recursive: true })
   const temporary = `${path}.tmp-${process.pid}`
-  const payload = `${JSON.stringify({ schemaVersion: STORE_VERSION, accounts }, null, 2)}\n`
+  const payload = `${JSON.stringify({
+    schemaVersion: STORE_VERSION,
+    accounts: doc.accounts,
+    ...Object.keys(doc.activeByRegion).length === 0 ? {} : { activeByRegion: doc.activeByRegion },
+  }, null, 2)}\n`
   await writeFile(temporary, payload, 'utf8')
   await chmod(temporary, 0o600)
   await rename(temporary, path)

@@ -41,6 +41,7 @@ import {
   expiryBucketOf,
   formatContextWindow,
   MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_CARD_KEYS,
   MINIMAX_DISPLAY_NAME,
   MINIMAX_GITHUB_URL,
@@ -660,14 +661,16 @@ function AccountPanel(props: {
   message: string | undefined
   onClaim(): void
   onDelete(route: MiniMaxRouteView): void
+  onSelectAccount(id: string): void
   t: MiniMaxTranslate
 }): ReactElement {
-  const { status, region, nowMs, busy, message, onClaim, onDelete, t } = props
+  const { status, region, nowMs, busy, message, onClaim, onDelete, onSelectAccount, t } = props
   const routes = routesForRegion(effectiveRoutesOf(status), region)
   const live = routes.find(route => !isCopyRoute(route))
   const copies = routes.filter(route => isCopyRoute(route))
   const signin: MiniMaxSigninView | undefined = live?.signin
   const today = signin?.days.find(day => day.isToday)
+  const pool = live?.pool
 
   return (
     <div className="dsm-minimax-panel">
@@ -676,6 +679,44 @@ function AccountPanel(props: {
 
       {routes.length === 0 && (
         <p className="dsm-minimax-hint">{t('account.noneRegistered')}</p>
+      )}
+
+      {pool !== undefined && pool.accounts.length > 1 && (
+        <>
+          <div className="dsm-minimax-panel-head">
+            <span className="dsm-minimax-panel-title">{t('pool.title')}</span>
+            <span className="dsm-minimax-hint">{t('pool.hint')}</span>
+          </div>
+          {pool.accounts.map(entry => (
+            <div key={entry.id} className={`dsm-minimax-row${entry.active ? ' dsm-minimax-row-active' : ''}`}>
+              <div className="dsm-minimax-row-main">
+                <div className="dsm-minimax-model-id">
+                  {entry.label}
+                  {entry.live && <span className="dsm-minimax-chip">{t('pool.live')}</span>}
+                  {entry.active && (
+                    <span className="dsm-minimax-chip dsm-minimax-chip-on">{t('pool.active')}</span>
+                  )}
+                  {entry.drained && <span className="dsm-minimax-chip">{t('pool.drained')}</span>}
+                </div>
+                <div className="dsm-minimax-model-name">
+                  {entry.balance === undefined
+                    ? t('pool.balanceUnknown')
+                    : t('pool.balance', { amount: formatCredits(entry.balance) })}
+                </div>
+              </div>
+              {!entry.active && (
+                <button
+                  type="button"
+                  className="dsm-minimax-btn-ghost"
+                  disabled={busy}
+                  onClick={() => onSelectAccount(entry.id)}
+                >
+                  {t('pool.setActive')}
+                </button>
+              )}
+            </div>
+          ))}
+        </>
       )}
 
       {routes.map(route => (
@@ -1184,6 +1225,20 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [settingsScope, afterWrite])
 
+  const handleSelectAccount = useCallback(async (id: string): Promise<void> => {
+    try {
+      const outcome = await postAction(MINIMAX_ACCOUNT_SELECT_PATH, { region, id })
+      if (!outcome.ok) {
+        setActionMessage(outcome.message)
+        return
+      }
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [region, afterWrite])
+
   const handleReasoningEffort = useCallback(async (effort: string): Promise<void> => {
     if (settingsScope === undefined) return
     try {
@@ -1304,6 +1359,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                 message={actionMessage}
                 onClaim={() => { void handleClaim() }}
                 onDelete={route => { void handleDelete(route) }}
+                onSelectAccount={id => { void handleSelectAccount(id) }}
                 t={translate}
               />
             )

@@ -47,13 +47,19 @@ import {
   accountRouteOf,
   readAccounts,
   readAccountsSync,
+  readActiveSelections,
+  writeActiveSelection,
   syncLiveAccount,
   writeAccounts,
 } from './accounts.ts'
 import { MiniMaxAccountSource } from './account-source.ts'
+import { MiniMaxAccountPool, type PoolAccount } from './pool.ts'
 import { registerMiniMaxActionRoutes } from './actions.ts'
 import type { MiniMaxActionContext, MiniMaxModelTestResult } from './actions.ts'
 import { PLUGIN_VERSION } from './version.ts'
+
+/** 池里"本机登录"那一项的 id；副本用各自的 account id，不会撞。 */
+const LIVE_ACCOUNT_ID = 'live'
 
 /** 插件名：同时是 Loader 条目 id 与设置命名空间。 */
 export const name = 'dsh-connect-minmax'
@@ -324,6 +330,48 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     },
   })
 
+  /** 取（或建）某个副本的凭据来源；同一账号永远共用一个实例。 */
+  const accountSourceOf = (account: { id: string, region: MiniMaxRegion }): MiniMaxAccountSource => {
+    const cached = accountSources.get(account.id)
+    if (cached !== undefined) return cached
+    const created = new MiniMaxAccountSource(account.id, account.region, {
+      baseUrl: effectiveBaseUrl(
+        account.region === 'global' ? config.globalBaseUrl : config.baseUrl,
+        regionBaseUrl(account.region),
+      ),
+    })
+    accountSources.set(account.id, created)
+    return created
+  }
+
+  /**
+   * 把"当前已接管的副本"同步进各区域的账号池。
+   *
+   * 池里的顺序就是优先级：本机登录在前（由 mcode 续期，最省事），副本按存储顺序
+   * 兜底。这样"本机那个号积分用完了"会自然落到副本上，而用户不需要做任何事。
+   */
+  const refreshPools = (): void => {
+    const accounts = readAccountsSync()
+    for (const [region, pool] of regionPools) {
+      const live = liveAccounts.get(region)
+      const copies: PoolAccount[] = accounts
+        .filter(account => account.owned && account.region === region)
+        .map(account => ({
+          id: account.id,
+          label: accountDisplayNameOf(account),
+          live: false,
+          source: accountSourceOf(account),
+        }))
+      pool.setAccounts(live === undefined ? copies : [live, ...copies])
+      if (!restoredRegions.has(region)) {
+        restoredRegions.add(region)
+        const remembered = readActiveSelections()[region]
+        // 记住的账号可能已被删除：`select()` 自己会拒绝，不用先判断。
+        if (remembered !== undefined) pool.select(remembered)
+      }
+    }
+  }
+
   /**
    * 注册一条路由；已被占用时只 warn。
    *
@@ -375,6 +423,26 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   /** 本机登录（每个区域一条），也是镜像"当前账号"的来源。 */
   const liveAuths = new Map<MiniMaxRegion, MiniMaxAuth>()
+  /** 每个区域的账号池；区域路由的凭据面就是它。 */
+  const regionPools = new Map<MiniMaxRegion, MiniMaxAccountPool>()
+  /** 每个区域的本机登录候选（池里的第一个）。 */
+  const liveAccounts = new Map<MiniMaxRegion, PoolAccount>()
+  /**
+   * 已经恢复过"上次选中的账号"的区域。
+   *
+   * 只能在副本真正装进池之后恢复一次：建池那一刻池里只有本机登录，
+   * `select()` 会因为 id 不存在被拒。而"每次都恢复"又会跟运行时的自动换号
+   * 打架——自动切换不写存储，下一次重算账号列表就会把用户/系统刚切过去的
+   * 账号又拨回去。
+   */
+  const restoredRegions = new Set<MiniMaxRegion>()
+  /**
+   * 副本凭据来源按账号 id 缓存。
+   *
+   * 必须共用同一个实例：同一个账号若被"副本路由"和"区域池"各持一份 source，
+   * 两边会并发用同一条一次性 refresh token 去刷新，后刷的那边必然 `invalid_grant`。
+   */
+  const accountSources = new Map<string, MiniMaxAccountSource>()
   /** 每条路由的适配器；`/model/test` 要用它打真实通路，而不是另造一条请求。 */
   const adaptersByRoute = new Map<string, MiniMaxAdapter>()
 
@@ -398,7 +466,20 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       invalidate: () => auth.invalidate(),
     }
 
-    const registration = registerRoute(route, source, displayNameForRegion(region))
+    // 池化：本机登录 + 同区域已接管副本，都是这条路由的候选凭据。
+    // 单账号时池里只有本机登录，行为与以前完全一致。
+    const liveAccount: PoolAccount = {
+      id: LIVE_ACCOUNT_ID,
+      label: '本机登录',
+      source,
+      live: true,
+    }
+    const pool = new MiniMaxAccountPool(region, { regionLabel: auth.regionLabel, baseUrl })
+    pool.setAccounts([liveAccount])
+    regionPools.set(region, pool)
+    liveAccounts.set(region, liveAccount)
+
+    const registration = registerRoute(route, pool, displayNameForRegion(region))
     if (registration === undefined) continue
 
     liveAuths.set(region, auth)
@@ -412,8 +493,14 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       regionLabel: auth.regionLabel,
       baseUrl,
       auth: statusAuthOf(auth),
-      // 积分/签到走同一个 Bearer；只在登录态可用时才被调用（见 status.ts）。
-      accountToken: signal => source.token(signal),
+      // 积分/签到走同一个 Bearer；用**池**取 token，读到的就是当前生效账号的账。
+      accountToken: signal => pool.token(signal),
+      pool: () => pool.describe(),
+      // 余额回灌：读到就把"当前账号还有没有钱"告诉池，下一次选号立刻用上。
+      reportCredits: (totalRemaining) => {
+        const active = pool.active
+        if (active !== undefined) pool.reportBalance(active, totalRemaining)
+      },
     })
   }
 
@@ -442,12 +529,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     for (const account of owned) {
       if (copyDisposers.has(account.id)) continue
       const route = accountRouteOf(account)
-      const source = new MiniMaxAccountSource(account.id, account.region, {
-        baseUrl: effectiveBaseUrl(
-          account.region === 'global' ? config.globalBaseUrl : config.baseUrl,
-          regionBaseUrl(account.region),
-        ),
-      })
+      const source = accountSourceOf(account)
       const registration = registerRoute(route, source, accountDisplayNameOf(account))
       if (registration === undefined) continue
       copyDisposers.set(account.id, registration.dispose)
@@ -465,6 +547,9 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         `dsh-connect-minmax: 已接管账号副本 "${account.label}"（${route}，区域 ${source.regionLabel}）`,
       )
     }
+
+    // 路由表变了，池里的候选也要跟着变；否则"接管了却永远不会被自动切到"。
+    refreshPools()
   }
 
   /**
@@ -514,6 +599,14 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         const auth = liveAuths.get(region)
         if (auth === undefined) throw new Error(`本机没有注册${region === 'global' ? '国际版' : '国内版'}的登录路由。`)
         return auth.token(signal)
+      },
+      selectAccount: async (region, id) => {
+        const pool = regionPools.get(region)
+        if (pool === undefined) return false
+        if (!pool.select(id)) return false
+        // 立刻落盘：切换是用户显式动作，不能等下次重启才发现没记住。
+        await writeActiveSelection(region, id)
+        return true
       },
       testModel: async (route, model, signal): Promise<MiniMaxModelTestResult> => {
         const adapter = adaptersByRoute.get(route)

@@ -108,6 +108,14 @@ export const en = {
   'panel.diagnostics': 'Diagnostics',
   /* ---- 账号页 ---- */
   'account.delete': 'Delete',
+  'pool.title': 'Account pool',
+  'pool.hint': 'The active account serves requests; when its credits run out the next one takes over automatically',
+  'pool.live': 'local login',
+  'pool.active': 'in use',
+  'pool.drained': 'out of credits',
+  'pool.setActive': 'Use this account',
+  'pool.balance': 'Credits: {amount}',
+  'pool.balanceUnknown': 'Credits: not read yet',
   'account.noneRegistered': 'No provider is registered for this region — enable it above.',
   /* ---- 积分 ---- */
   'credits.balance': 'Credits',
@@ -264,6 +272,14 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'panel.diagnostics': '诊断',
   /* ---- 账号页 ---- */
   'account.delete': '删除',
+  'pool.title': '账号池',
+  'pool.hint': '当前账号接请求；它的积分用完后自动换下一个',
+  'pool.live': '本机登录',
+  'pool.active': '使用中',
+  'pool.drained': '积分已用尽',
+  'pool.setActive': '用这个号',
+  'pool.balance': '积分 {amount}',
+  'pool.balanceUnknown': '积分：尚未读取',
   'account.noneRegistered': '这个区域还没有注册任何供应商——用上面的开关打开。',
   /* ---- 积分 ---- */
   'credits.balance': '积分余额',

@@ -82,6 +82,30 @@ export function pickPoolAccount(
   return usable ?? active ?? candidates[0]
 }
 
+/** 状态卡片要展示的一个池内账号。 */
+export interface PoolSnapshotEntry {
+  /** 稳定标识。 */
+  id: string
+  /** 展示名。 */
+  label: string
+  /** 是否本机登录。 */
+  live: boolean
+  /** 是否当前生效账号。 */
+  active: boolean
+  /** 最近读到的剩余积分；`undefined` = 还没读到。 */
+  balance?: number
+  /** 判定为积分耗尽的时间点；`undefined` = 不处于耗尽态。 */
+  drainedUntilMs?: number
+}
+
+/** 池的快照：卡片据此展示"池里有哪些号、现在用哪个、谁没钱了"。 */
+export interface PoolSnapshot {
+  /** 按优先级排列。 */
+  accounts: PoolSnapshotEntry[]
+  /** 当前生效账号 id。 */
+  active?: string
+}
+
 /** 池里一个账号：既是凭据来源，也带展示用的元信息。 */
 export interface PoolAccount {
   /** 稳定标识：`live` 表示本机登录，其余是副本 id。 */
@@ -228,6 +252,25 @@ export class MiniMaxAccountPool implements MiniMaxCredentialSource {
       }
     }
     throw lastError ?? new Error('账号池里没有能产出 token 的账号。')
+  }
+
+  /** 生成状态卡片用的快照。 */
+  describe(nowMs: number = Date.now()): PoolSnapshot {
+    return {
+      accounts: this.accounts.map((account) => {
+        const state = this.candidateOf(account.id)
+        const drained = state.drainedUntilMs !== undefined && state.drainedUntilMs > nowMs
+        return {
+          id: account.id,
+          label: account.label,
+          live: account.live,
+          active: account.id === this.activeId,
+          ...state.balance === undefined ? {} : { balance: state.balance },
+          ...drained ? { drainedUntilMs: state.drainedUntilMs } : {},
+        }
+      }),
+      ...this.activeId === undefined ? {} : { active: this.activeId },
+    }
   }
 
   /** 清空当前账号的缓存（401 之后由适配器调用）。 */

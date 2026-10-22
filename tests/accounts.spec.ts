@@ -1,3 +1,7 @@
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -7,11 +11,13 @@ import {
   accountRouteOf,
   accountStateOf,
   readAccounts,
+  readActiveSelections,
   refreshAccountCredential,
   syncLiveAccount,
-  writeAccounts,
   type MiniMaxLiveCredential,
   type MiniMaxStoredAccount,
+  writeAccounts,
+  writeActiveSelection,
 } from '../src/accounts.ts'
 
 /** 一条"本机登录"快照。 */
@@ -212,5 +218,43 @@ describe('readAccounts / writeAccounts', () => {
     const read = await readAccounts(path)
     expect(read).toHaveLength(1)
     expect(read[0]?.id).toBe('cn-cfd703e1')
+  })
+})
+
+describe('当前选中的账号（池的持久化选择）', () => {
+  it('写进去能读回来', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mm-accounts-'))
+    const path = join(dir, '.minimax-accounts.json')
+    await writeActiveSelection('cn', 'cn-aaaa1111', path)
+    expect(readActiveSelections(path)).toEqual({ cn: 'cn-aaaa1111' })
+  })
+
+  it('两个区域各记各的，互不覆盖', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mm-accounts-'))
+    const path = join(dir, '.minimax-accounts.json')
+    await writeActiveSelection('cn', 'cn-a', path)
+    await writeActiveSelection('global', 'global-b', path)
+    expect(readActiveSelections(path)).toEqual({ cn: 'cn-a', global: 'global-b' })
+  })
+
+  it('重写账号列表不会把选择顺手清掉', async () => {
+    // 这条是真实的丢数据路径：换一次账号就 writeAccounts 一次，
+    // 如果它不带上 activeByRegion，用户手动做的切换就白做了。
+    const dir = await mkdtemp(join(tmpdir(), 'mm-accounts-'))
+    const path = join(dir, '.minimax-accounts.json')
+    await writeActiveSelection('cn', 'cn-aaaa1111', path)
+    await writeAccounts([], path)
+    expect(readActiveSelections(path)).toEqual({ cn: 'cn-aaaa1111' })
+  })
+
+  it('文件不存在时返回空对象（不抛）', () => {
+    expect(readActiveSelections('/nonexistent/definitely/missing.json')).toEqual({})
+  })
+
+  it('只认 cn / global 两个键，别的键丢弃', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mm-accounts-'))
+    const path = join(dir, '.minimax-accounts.json')
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, accounts: [], activeByRegion: { cn: 'cn-a', bogus: 'x' } }), 'utf8')
+    expect(readActiveSelections(path)).toEqual({ cn: 'cn-a' })
   })
 })

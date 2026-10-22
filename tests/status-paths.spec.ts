@@ -203,3 +203,38 @@ describe('MINIMAX_CARD_KEYS', () => {
     expect(new Set(MINIMAX_CARD_KEYS).size).toBe(MINIMAX_CARD_KEYS.length)
   })
 })
+
+describe('账号池投影', () => {
+  const base = { ok: true, route: 'minimax', region: 'cn', regionLabel: '国内版', baseUrl: 'https://x', login: { state: 'ready', source: 'lease' }, models: [], catalog: [], enabledRegions: ['cn'], longContext: false, pluginVersion: '1', checkedAt: 1 }
+
+  it('把池解析成视图：谁在用、谁没钱、谁积分已用尽', () => {
+    const view = toStatusView({
+      ...base,
+      routes: [{
+        route: 'minimax', region: 'cn', regionLabel: '国内版', baseUrl: 'https://x',
+        login: { state: 'ready', source: 'lease' },
+        pool: {
+          active: 'live',
+          accounts: [
+            { id: 'live', label: '本机登录', live: true, active: true, balance: 0 },
+            { id: 'cn-aaaa1111', label: '副本 1', live: false, active: false, drainedUntilMs: 999 },
+          ],
+        },
+      }],
+    })
+    expect(view?.routes[0]?.pool?.active).toBe('live')
+    expect(view?.routes[0]?.pool?.accounts).toHaveLength(2)
+    expect(view?.routes[0]?.pool?.accounts[0]).toMatchObject({ id: 'live', live: true, active: true, balance: 0, drained: false })
+    expect(view?.routes[0]?.pool?.accounts[1]).toMatchObject({ id: 'cn-aaaa1111', drained: true })
+  })
+
+  it('旧版本应答没有 pool 字段时留空（卡片按单账号处理，不画空池）', () => {
+    const view = toStatusView({ ...base, routes: [{ route: 'minimax', region: 'cn', regionLabel: '国内版', baseUrl: 'https://x', login: { state: 'ready', source: 'lease' } }] })
+    expect(view?.routes[0]?.pool).toBeUndefined()
+  })
+
+  it('accounts 为空数组时也留空（不画一个没有任何账号的池）', () => {
+    const view = toStatusView({ ...base, routes: [{ route: 'minimax', region: 'cn', regionLabel: '国内版', baseUrl: 'https://x', login: { state: 'ready', source: 'lease' }, pool: { accounts: [] } }] })
+    expect(view?.routes[0]?.pool).toBeUndefined()
+  })
+})

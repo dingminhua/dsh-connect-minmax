@@ -23,6 +23,8 @@ export const MINIMAX_STATUS_PATH = '/plugins/dsh-connect-minmax/status'
 export const MINIMAX_SIGNIN_CLAIM_PATH = '/plugins/dsh-connect-minmax/signin/claim'
 export const MINIMAX_ACCOUNT_REMOVE_PATH = '/plugins/dsh-connect-minmax/account/remove'
 export const MINIMAX_MODEL_TEST_PATH = '/plugins/dsh-connect-minmax/model/test'
+/** 把池里某个账号设为当前账号。 */
+export const MINIMAX_ACCOUNT_SELECT_PATH = '/plugins/dsh-connect-minmax/account/select'
 
 /** 本插件注册的 LLM 路由名。 */
 export const MINIMAX_ROUTE = 'minimax'
@@ -129,6 +131,50 @@ export interface MiniMaxSigninView {
 }
 
 /** 一条供应商路由（一个区域）的状态。 */
+/** 池里的一个账号（卡片展示用）。 */
+export interface MiniMaxPoolEntryView {
+  /** 稳定标识：`live` 或副本 id。 */
+  id: string
+  /** 展示名。 */
+  label: string
+  /** 是否本机登录。 */
+  live: boolean
+  /** 是否当前生效账号。 */
+  active: boolean
+  /** 最近读到的剩余积分；`undefined` = 还没读到。 */
+  balance?: number
+  /** 是否被判定为积分耗尽。 */
+  drained: boolean
+}
+
+/** 一个区域的账号池快照。 */
+export interface MiniMaxPoolView {
+  accounts: MiniMaxPoolEntryView[]
+  active?: string
+}
+
+/** 池里的一个账号（卡片展示用）。 */
+export interface MiniMaxPoolEntryView {
+  /** 稳定标识：`live` 或副本 id。 */
+  id: string
+  /** 展示名。 */
+  label: string
+  /** 是否本机登录。 */
+  live: boolean
+  /** 是否当前生效账号。 */
+  active: boolean
+  /** 最近读到的剩余积分；`undefined` = 还没读到。 */
+  balance?: number
+  /** 是否被判定为积分耗尽（短时间内不会再被选中）。 */
+  drained: boolean
+}
+
+/** 一个区域的账号池快照。 */
+export interface MiniMaxPoolView {
+  accounts: MiniMaxPoolEntryView[]
+  active?: string
+}
+
 export interface MiniMaxRouteView {
   route: string
   region: 'cn' | 'global'
@@ -137,6 +183,8 @@ export interface MiniMaxRouteView {
   login: MiniMaxLoginView
   /** 来自账号副本时的副本 id（`cn-cfd703e1` 这种）；本机登录没有。 */
   accountId?: string
+  /** 该区域的账号池；旧版本应答没有这个字段。 */
+  pool?: MiniMaxPoolView
   credits?: MiniMaxCreditsView
   signin?: MiniMaxSigninView
 }
@@ -320,9 +368,11 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     const accountId = stringOf(row['accountId'])
     const credits = parseCredits(row['credits'])
     const signin = parseSignin(row['signin'])
+    const pool = parsePool(row['pool'])
     routes.push({
       route,
       ...accountId === undefined ? {} : { accountId },
+      ...pool === undefined ? {} : { pool },
       ...credits === undefined ? {} : { credits },
       ...signin === undefined ? {} : { signin },
       region: row['region'] === 'global' ? 'global' : 'cn',
@@ -340,6 +390,37 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     })
   }
   return routes
+}
+
+/**
+ * 解析账号池段。
+ *
+ * 解析不出任何账号时返回 `undefined`：旧版本宿主不返回这个字段，卡片那时按
+ * "只有一个账号"处理，而不是显示一个空池子。
+ */
+function parsePool(value: unknown): MiniMaxPoolView | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  if (!Array.isArray(row['accounts'])) return undefined
+  const accounts: MiniMaxPoolEntryView[] = []
+  for (const item of row['accounts']) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    const id = stringOf(entry['id'])
+    if (id === undefined) continue
+    const balance = finiteNumberOf(entry['balance'])
+    accounts.push({
+      id,
+      label: stringOf(entry['label']) ?? id,
+      live: entry['live'] === true,
+      active: entry['active'] === true,
+      ...balance === undefined ? {} : { balance },
+      drained: finiteNumberOf(entry['drainedUntilMs']) !== undefined,
+    })
+  }
+  if (accounts.length === 0) return undefined
+  const active = stringOf(row['active'])
+  return { accounts, ...active === undefined ? {} : { active } }
 }
 
 /** 解析积分概览：任何形状不符就整段丢弃（宁可不显示，也不显示半个数字）。 */
