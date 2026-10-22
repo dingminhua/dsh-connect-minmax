@@ -337,6 +337,62 @@ describe('MiniMaxAuth / 凭据优先级', () => {
     expect(status.generation).toBe(2)
   })
 
+  // 租约协议**没有区域参数**：broker 只发"当前活跃账号"的令牌。本机同时登录国内版与
+  // 国际版时（本插件默认形态），无条件采用租约就会把国际版令牌交给国内版路由，
+  // 实测 `401 invalid access token` 且整条通路挂掉。generation 是唯一可用的判别字段。
+  it('broker 的 generation 与本区域盘上凭据不一致时，改用本区域凭据（跨区令牌）', async () => {
+    const dir = await tempDir()
+    // broker 服务的是另一个区域的账号：generation 11 ≠ 本区域 15。
+    const broker = await startBroker(dir, { accessToken: 'mmoat_other_region', generation: 11 })
+    track(dir, broker)
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file', generation: 15 })
+
+    const auth = new MiniMaxAuth({ dataDir: dir })
+    await expect(auth.token()).resolves.toBe('mmoat_from_file')
+  })
+
+  it('跨区拒绝租约时把原因写进 lastError，且不谎称租约坏了', async () => {
+    const dir = await tempDir()
+    const broker = await startBroker(dir, { accessToken: 'mmoat_other_region', generation: 11 })
+    track(dir, broker)
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file', generation: 15 })
+
+    const auth = new MiniMaxAuth({ dataDir: dir })
+    await auth.token()
+    // 走的是公开出口 lastFailure（状态卡片读的就是它）：回落成功不该把这条诊断清掉。
+    expect(auth.lastFailure).toContain('另一个区域')
+    // 说清楚是"不属于本区域"，否则排查时会去怀疑 broker 故障。
+    expect(auth.lastFailure).toContain('generation 11')
+    expect(auth.lastFailure).toContain('15')
+  })
+
+  it('generation 一致时仍优先用租约（同区由 mcode 负责刷新）', async () => {
+    const dir = await tempDir()
+    const broker = await startBroker(dir, { accessToken: 'mmoat_from_lease', generation: 15 })
+    track(dir, broker)
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file', generation: 15 })
+
+    const auth = new MiniMaxAuth({ dataDir: dir })
+    await expect(auth.token()).resolves.toBe('mmoat_from_lease')
+  })
+
+  it('盘上没有 generation 可比时保持旧行为采用租约（拒绝只会把可能变成一定不能用）', async () => {
+    const dir = await tempDir()
+    const broker = await startBroker(dir, { accessToken: 'mmoat_from_lease', generation: 11 })
+    track(dir, broker)
+    // 有 accessToken/expiresAtMs 但没有 generation 字段。
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file' })
+    const credDir = join(dir, 'auth', 'prod', 'cn', CLIENT_ID)
+    const raw = JSON.parse(await readFile(join(credDir, 'auth.json'), 'utf8')) as {
+      records: Record<string, Record<string, unknown>>
+    }
+    for (const record of Object.values(raw.records)) delete record['generation']
+    await writeFile(join(credDir, 'auth.json'), JSON.stringify(raw))
+
+    const auth = new MiniMaxAuth({ dataDir: dir })
+    await expect(auth.token()).resolves.toBe('mmoat_from_lease')
+  })
+
   it('token() 每次都要求 60000ms 最小有效期', async () => {
     const dir = await tempDir()
     const broker = await startBroker(dir)

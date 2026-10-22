@@ -385,6 +385,10 @@ async function readAccountInfo(
     lots.ok ? lots.lots : undefined,
     nowMs,
   )
+  // 把底层原因带上来：只说"读取失败"的话，卡片上那个空档位永远查不出为什么空。
+  const creditError = balance.ok
+    ? (lots.ok ? undefined : lots.error)
+    : (balance.error ?? '积分余额读取失败。')
   const read: AccountRead = {
     atMs: nowMs,
     credits: {
@@ -393,7 +397,7 @@ async function readAccountInfo(
       ...snapshot.expiringIn7d === undefined ? {} : { expiringIn7d: snapshot.expiringIn7d },
       ...snapshot.expiringIn30d === undefined ? {} : { expiringIn30d: snapshot.expiringIn30d },
       ...snapshot.earliestExpiryMs === undefined ? {} : { earliestExpiryMs: snapshot.earliestExpiryMs },
-      ...snapshot.error === undefined ? {} : { error: snapshot.error },
+      ...((creditError ?? snapshot.error) === undefined ? {} : { error: creditError ?? snapshot.error }),
     },
     signin: {
       ok: signin.ok,

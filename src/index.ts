@@ -268,6 +268,8 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     // 会让它每个请求都重建一次 pi-ai 集合（快照缓存永不命中）。
     const profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile> = new Map([[route, profile]])
     const adapter = new MiniMaxAdapter(adapterOptions(profiles), source)
+    // 卡片的 /model/test 要用它打真实通路；没有这张表，测试动作只能报"未知路由"。
+    adaptersByRoute.set(route, adapter)
     const registration = ctx.llm.registerAdapter([route], adapter) as {
       replace?: (adapter: unknown) => void
       dispose?: () => void
@@ -434,11 +436,22 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
             maxTokens: 64,
             ...signal === undefined ? {} : { signal },
           })) {
-            const event = chunk as { type?: string, text?: string, reason?: string, error?: unknown }
+            const event = chunk as {
+              type?: string
+              text?: string
+              // finish 的 reason 是**对象**（`{kind:'stop'}` / `{kind:'error',failure:{…}}`），
+              // 按字符串比会得到 "[object Object]"，于是每次测试都"失败"。
+              reason?: { kind?: string, failure?: { message?: string } }
+              error?: unknown
+            }
             if (event.type === 'text-delta') text += event.text ?? ''
             if (event.type === 'error') failure = String(event.error ?? '上游返回错误')
-            if (event.type === 'finish' && event.reason !== undefined && event.reason !== 'end') {
-              failure ??= `finish=${event.reason}`
+            if (event.type === 'finish') {
+              const kind = event.reason?.kind
+              // stop / tool-calls 是正常收尾；其余（error、length…）算失败并带上原因。
+              if (kind !== undefined && kind !== 'stop' && kind !== 'tool-calls') {
+                failure ??= event.reason?.failure?.message ?? `finish=${kind}`
+              }
             }
             if (text.length > 24) break
           }

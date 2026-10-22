@@ -199,25 +199,41 @@ export class MiniMaxAuth {
     const cached = this.readCache()
     if (cached) return cached.accessToken
 
-    // 1) 首选：broker 租约（由 mcode 刷新，零副作用）。
-    try {
-      const lease = await this.leaseClient.lease(LEASE_MIN_VALIDITY_MS, signal)
-      if (this.isUsable(lease.expiresAtMs)) {
-        this.cached = {
-          accessToken: lease.accessToken,
-          expiresAtMs: lease.expiresAtMs,
-          source: 'lease',
+    // 先读本区域的盘上凭据：它既是兜底，也是判断"broker 说的是不是这个账号"的参照。
+    const local = await this.readFileCredential()
+
+    // 1) broker 租约（由 mcode 刷新，零副作用），**但仅限 broker 正在服务本区域账号时**。
+    //
+    //    租约协议没有区域参数：broker 只发"当前活跃账号"的令牌。本机同时登录国内版与
+    //    国际版时（两个区域各一条路由，这是本插件的默认形态），无条件采用租约就会把
+    //    国际版的令牌交给国内版路由 —— 实测 `401 invalid access token`，而且是**整条
+    //    国内版通路**挂掉，不是积分这种附加信息读不到。
+    //
+    //    `generation` 是唯一可用的判别字段：mcode 按账号单调递增它，broker 与盘上
+    //    record 的 generation 相等就说明两边说的是同一个账号。
+    if (await this.leaseClient.available()) {
+      try {
+        const lease = await this.leaseClient.lease(LEASE_MIN_VALIDITY_MS, signal)
+        if (this.brokerServesThisRegion(lease.generation, local) && this.isUsable(lease.expiresAtMs)) {
+          this.cached = {
+            accessToken: lease.accessToken,
+            expiresAtMs: lease.expiresAtMs,
+            source: 'lease',
+          }
+          this.lastError = undefined
+          return lease.accessToken
         }
-        this.lastError = undefined
-        return lease.accessToken
+        this.lastError = this.isUsable(lease.expiresAtMs)
+          ? // 不是"租约坏了"，而是"租约不属于这个区域"：说清楚，否则排查时会去怀疑 broker。
+            `MiniMax Code 的认证租约当前服务的是另一个区域的账号（generation ${lease.generation}，本区域 ${local?.generation ?? '未知'}），已改用本区域凭据。`
+          : 'MiniMax Code 返回的登录态即将过期。'
+      } catch (error) {
+        this.lastError = describeError(error)
       }
-      this.lastError = 'MiniMax Code 返回的登录态即将过期。'
-    } catch (error) {
-      this.lastError = describeError(error)
     }
 
     // 2) 兜底：只读本地凭据文件，且必须尚未过期。
-    const credential = await this.readFileCredential()
+    const credential = local
     if (credential && this.isUsable(credential.expiresAtMs)) {
       this.cached = {
         accessToken: credential.accessToken,
@@ -254,6 +270,20 @@ export class MiniMaxAuth {
   invalidate(): void {
     this.cached = undefined
     this.leaseClient.close()
+  }
+
+  /**
+   * broker 的租约是否属于本区域的账号。
+   *
+   * 盘上没有可比对的 generation 时（文件缺失或字段缺失）**保持旧行为**采用租约：
+   * 那种情况下本区域也没有别的凭据可用，拒绝租约只会把"可能能用"变成"一定不能用"。
+   */
+  private brokerServesThisRegion(
+    leaseGeneration: number,
+    local: FileCredential | undefined,
+  ): boolean {
+    if (local?.generation === undefined) return true
+    return leaseGeneration === local.generation
   }
 
   private fromBrokerStatus(status: { status: string; generation: number; expiresAtMs?: number }): MiniMaxLoginStatus {
