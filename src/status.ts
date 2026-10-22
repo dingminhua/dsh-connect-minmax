@@ -68,13 +68,15 @@ export interface MiniMaxStatusModel {
   thinkingMode: 'switchable' | 'forced'
 }
 
-/** 一条路由（一个区域）的状态。 */
+/** 一条路由（一个区域、或一个账号副本）的状态。 */
 export interface MiniMaxStatusRoute {
   route: string
   region: MiniMaxStatusRegion
   regionLabel: string
   baseUrl: string
   login: MiniMaxStatusLogin
+  /** 该路由来自账号副本时的副本 id；本机登录没有这个字段。 */
+  accountId?: string
 }
 
 /** 状态路由的应答文档。 */
@@ -145,6 +147,8 @@ export interface MiniMaxStatusModelSpec {
 /** 一条已注册路由的凭据面与元数据。 */
 export interface MiniMaxStatusRouteDeps {
   route: string
+  /** 该路由若来自"账号副本"，这里是副本 id；本机登录没有这个字段。 */
+  accountId?: string
   region: MiniMaxStatusRegion
   regionLabel: string
   baseUrl: string
@@ -307,6 +311,7 @@ export async function buildMiniMaxStatus(
     regionLabel: entry.regionLabel,
     baseUrl: entry.baseUrl,
     login: await inspectWithTimeout(entry.auth),
+    ...entry.accountId === undefined ? {} : { accountId: entry.accountId },
   })))
   const primary = routes[0] ?? {
     route: MINIMAX_STATUS_ROUTE,

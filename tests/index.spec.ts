@@ -23,6 +23,8 @@ interface Harness {
   warnings: string[]
   infos: string[]
   injections: string[][]
+  /** `ctx.effect` 注册的清理函数（测试里手动触发，模拟 fiber 释放）。​ */
+  disposers: (() => void)[]
 }
 
 /** 假宿主上下文：只实现 `apply()` 真正会碰的面。 */
@@ -31,6 +33,7 @@ function harness(options: { providers?: readonly LlmProviderInfo[] } = {}): Harn
   const warnings: string[] = []
   const infos: string[] = []
   const injections: string[][] = []
+  const disposers: (() => void)[] = []
   const llm: FakeLlm = {
     listProviders: () => options.providers ?? [],
     registerAdapter: (routes, adapter) => {
@@ -45,11 +48,16 @@ function harness(options: { providers?: readonly LlmProviderInfo[] } = {}): Harn
       info: (message: string) => infos.push(message),
     },
     get: () => undefined,
+    effect: (setup: () => (() => void) | void) => {
+      const dispose = setup()
+      if (typeof dispose === 'function') disposers.push(dispose)
+      return dispose
+    },
     inject: (names: readonly string[], _callback: (inner: unknown) => void) => {
       injections.push([...names])
     },
   }
-  return { ctx: ctx as unknown as Context, registered, warnings, infos, injections }
+  return { ctx: ctx as unknown as Context, registered, warnings, infos, injections, disposers }
 }
 
 /** 取出唯一一次注册的 adapter，并断言它确实是 MiniMax 的包装。 */
@@ -212,6 +220,34 @@ describe('apply', () => {
     expect(normalize(undefined)).toEqual(['cn', 'global'])
     expect(normalize([])).toEqual(['cn', 'global'])
     expect(result.warnings.join('\n')).toContain('未知区域 "mars"')
+  })
+
+  it('owned 的账号副本注册成独立路由，跟随态副本不出路由', async () => {
+    const fs = await import('node:fs/promises')
+    const home = await fs.mkdtemp('/tmp/mm-index-')
+    const previous = process.env['DSH_HOME']
+    process.env['DSH_HOME'] = home
+    try {
+      await fs.writeFile(`${home}/.minimax-accounts.json`, JSON.stringify({
+        schemaVersion: 1,
+        accounts: [
+          // 跟随态（mcode 正在用）：不注册
+          { id: 'cn-follow01', region: 'cn', label: '副本 1', loginEpoch: 'follow01-x', accessToken: 'a', refreshToken: 'r', expiresAtMs: 1, owned: false, createdAtMs: 0 },
+          // 已接管：注册成 minimax-cn-owned001
+          { id: 'cn-owned001', region: 'cn', label: '副本 2', loginEpoch: 'owned001-x', accessToken: 'a', refreshToken: 'r', expiresAtMs: Date.now() + 3_600_000, owned: true, createdAtMs: 0 },
+        ],
+      }))
+
+      const result = harness()
+      apply(result.ctx, { regions: ['cn'] })
+      expect(result.registered.map(entry => entry.routes[0])).toEqual(['minimax', 'minimax-cn-owned001'])
+      const copy = result.registered[1]!.adapter as MiniMaxAdapter
+      expect(copy.providerInfo('minimax-cn-owned001').name).toBe('MiniMax 副本 · 副本 2')
+      expect(await copy.listModels('minimax-cn-owned001')).toHaveLength(MINIMAX_MODELS.length)
+    } finally {
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
   })
 
   it('不注册可配置供应商（minimax 已在 pi-ai 目录里，会 DUPLICATE_DIRECTORY）', () => {

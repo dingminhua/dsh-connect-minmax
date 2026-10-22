@@ -89,6 +89,20 @@ Harness  ──pi-ai anthropic-messages──▶  https://agent.minimax.cn/mavis
   仍失败则报 `AUTH` 并提示「请在 MiniMax Code 中重新登录」。
   **插件从不主动让 MiniMax Code 登出**（那会毁掉用户的登录态）。
 
+## 多账号（账号副本）
+
+MiniMax Code 每个区域只能留一个登录账号（国内 + 国际各一个）。插件会把本机登录**镜像**成
+自己的副本（`$DSH_HOME/.minimax-accounts.json`）：当你在 MiniMax Code 里换成另一个账号后，
+旧账号的刷新链由插件接管，于是两个账号可以同时用，各自在模型选择器里是一个分组
+（`MiniMax 副本 · …`）。
+
+- 跟着 MiniMax Code 的那个账号永远**只读不刷新**——插件一旦去刷新它，MiniMax Code 下一轮
+  续期就会 `invalid_grant`，被迫重新登录。
+- 如果你在 MiniMax Code 里**登出**，该账号的 refresh token 会被吊销，对应副本失效，
+  卡片会提示重新登录该账号以重新镜像。
+
+细节与实测依据见 `docs/design.md` 第 9 节。
+
 ## 图标
 
 `icons/*.png` 用 `dsh-connect-*` 插件家族的统一图标（与 workbuddy / trae / qoder 同一份

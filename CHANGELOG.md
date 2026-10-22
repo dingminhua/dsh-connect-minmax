@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0
+
+多账号：**账号副本**（MiniMax Code 每区域只能留一个登录，换了账号旧的那个还在）。
+
+- 新增 `src/accounts.ts`：把本机登录镜像成插件自有副本（`$DSH_HOME/.minimax-accounts.json`，0600），
+  按 `region + loginEpoch` 分键；同一区域换账号时把旧副本标记成 `owned`（刷新链归插件）。
+- 新增 `src/account-source.ts`：副本自己的凭据来源，用副本的 refresh token 续期，
+  同账号并发刷新只发一次请求（RT 一次性，重复刷新会毁掉整条链）。
+- `owned` 副本注册成独立 provider 路由（`minimax-cn-<id>` / `minimax-global-<id>`），
+  模型选择器里是独立分组；跟随态副本不出路由（否则会把 MiniMax Code 挤下线）。
+- 镜像与路由对账在 apply 期跑一次，之后每 60s 一次；新增副本自动注册、被删副本自动撤销。
+- 状态接口的 `routes[]` 每条新增可选 `accountId`；卡片新增「副本」标记与说明。
+- 调研结论写进 `docs/design.md`：refresh token 一次性轮换、mcode 凭据按机器分键、
+  以及为什么"复制当前正在用的账号"会打断 MiniMax Code 的续期。
+
 ## 0.3.0
 
 双区域支持，并按产品名收拢标识与图标。

@@ -175,3 +175,45 @@ export class MiniMaxAdapter extends PiAiAdapter { constructor(options: PiAiAdapt
 - 额度/积分查询（需 md5 签名，见 upstream.md §9）。
 - 图片生成、账号池、签到。
 - 自己发起 OAuth 设备码登录（协议已摸清，留作 v1.1 的「登录恢复」按钮）。
+
+## 9. 多账号：账号副本（0.4.0）
+
+MiniMax Code 的凭据存储按**机器**分键，不按账号：
+
+```ts
+// mcode: node_modules/@mavis/oauth-core/dist/namespace.js
+account = sha256(`${authHome}\0${clientId}`)          // base64url
+service = `com.minimax.mcode.oauth.${buildEnv}.${region}`
+credentialKey = { service, account }                    // auth.json 的 records 键
+```
+
+`authHome` 与 `clientId` 都是常量，所以**同一区域换账号是覆盖同一条记录**：
+mcode 每区域只能留一个账号（国内 + 国际各一个）。
+
+### 刷新语义（实测）
+
+- access token 有效期 `expires_in=3600`（1 小时），且是不透明字符串（不是 JWT，没有 `sub`）。
+- 续期是标准 OAuth：`POST https://account.minimax.cn|io/oauth2/token`，
+  `grant_type=refresh_token&refresh_token=…&client_id=mcode-public&scope=agent.default&audience=agent-backend`。
+  **没有设备签名、没有 client secret**，所以插件可以自己续期。
+- **refresh token 一次性轮换**：刷新会换发新 RT，旧 RT 立即失效
+  （实测第二次使用同一个 RT → `400 invalid_grant: this refresh token can no longer be used`）。
+- mcode 登出会 `POST /oauth2/revoke` 吊销 RT → 该账号所有副本一起失效。
+
+### 由此得到的所有权规则
+
+| 情形 | 处理 |
+| --- | --- |
+| 副本对应账号 = mcode **当前**登录账号 | 只镜像，`owned=false`，**绝不刷新**（否则 mcode 下一轮续期 invalid_grant） |
+| 同一区域换了账号（旧副本不再被 mcode 持有） | 旧副本 `owned=true`，插件自持刷新链，注册成独立路由 |
+| 副本刷新拿到 invalid_grant | 标记 `dead`，提示用户在 mcode 里重新登录该账号以重新镜像 |
+
+实现对应 `src/accounts.ts`（镜像与所有权状态机）与 `src/account-source.ts`
+（副本 token 来源 + 同账号刷新串行化）。
+
+### 已知限制
+
+- 副本是"那一刻"的 RT：若 mcode 在换账号前又刷新过一次，镜像到的 RT 已作废 → 领取时 400，
+  需要重新登录该账号再镜像一次。
+- 副本的账号身份只由 `loginEpoch`（每次登录的 UUID）标识，服务端 token 里没有账号 id，
+  所以展示名只能叫「副本 1/2」。

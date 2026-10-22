@@ -92,6 +92,8 @@ export interface MiniMaxRouteView {
   regionLabel: string
   baseUrl: string
   login: MiniMaxLoginView
+  /** 来自账号副本时的副本 id（`cn-cfd703e1` 这种）；本机登录没有。 */
+  accountId?: string
 }
 
 /** 状态路由的应答文档。 */
@@ -236,8 +238,10 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     const generation = finiteNumberOf(loginRaw['generation'])
     const expiresAtMs = finiteNumberOf(loginRaw['expiresAtMs'])
     const detail = stringOf(loginRaw['detail'])
+    const accountId = stringOf(row['accountId'])
     routes.push({
       route,
+      ...accountId === undefined ? {} : { accountId },
       region: row['region'] === 'global' ? 'global' : 'cn',
       regionLabel: stringOf(row['regionLabel']) ?? (row['region'] === 'global' ? '国际版' : '国内版'),
       baseUrl: stringOf(row['baseUrl']) ?? '',

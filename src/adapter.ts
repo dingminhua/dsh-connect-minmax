@@ -29,7 +29,7 @@ import {
 import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { PiAiAdapterOptions } from '@deepseek-ai/dsh-llm-pi-ai'
-import type { MiniMaxAuth } from './auth.ts'
+import type { MiniMaxCredentialSource } from './auth.ts'
 import { ROUTE, displayNameForRegion, toPiModel } from './catalog.ts'
 import type { MiniMaxModelSpec } from './catalog.ts'
 
@@ -98,7 +98,7 @@ export interface MiniMaxProviderOptions {
  * @returns 可直接放进 `Models.setProvider()` 的 provider。
  */
 export function createMiniMaxProvider(
-  auth: MiniMaxAuth,
+  auth: MiniMaxCredentialSource,
   models: readonly MiniMaxModelSpec[],
   options: MiniMaxProviderOptions = {},
 ): Provider {
@@ -277,7 +277,7 @@ export async function* guardStream(
 export class MiniMaxAdapter extends PiAiAdapter {
   constructor(
     options: PiAiAdapterOptions,
-    private readonly auth: MiniMaxAuth,
+    private readonly auth: MiniMaxCredentialSource,
   ) {
     super(options)
   }

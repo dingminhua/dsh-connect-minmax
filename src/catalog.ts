@@ -67,6 +67,11 @@ export function routeForRegion(region: MiniMaxRegion): string {
   return MINIMAX_ROUTES[region]
 }
 
+/** 区域 → 中文区域名（卡片与错误文案用）。 */
+export function regionLabelOf(region: MiniMaxRegion): string {
+  return region === 'global' ? '国际版' : '国内版'
+}
+
 /** 区域 → 模型选择器里的供应商显示名。 */
 export function displayNameForRegion(region: MiniMaxRegion): string {
   return region === 'global' ? 'MiniMax Global（本机登录）' : 'MiniMax（本机登录）'

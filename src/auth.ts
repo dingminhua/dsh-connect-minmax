@@ -17,6 +17,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import type { MiniMaxLiveCredential } from './accounts.ts'
 import { regionBaseUrl, type MiniMaxRegion } from './catalog.ts'
 import { AuthLeaseClient, AuthLeaseError } from './lease.ts'
 
@@ -42,6 +43,20 @@ const BROKER_EXPIRED = 'expired'
 const BROKER_AUTHORIZING = 'authorizing'
 /** 正在退出登录：token 已不可用，但也不是"从没登录过"。 */
 const BROKER_LOGOUT_PENDING = 'logout_pending'
+
+/**
+ * 适配器需要的最小凭据面。
+ *
+ * 抽成接口是因为"本机登录"（`MiniMaxAuth`）与"账号副本"（`MiniMaxAccountSource`）
+ * 是两种完全不同的取 token 方式，但适配器只关心 `token()` / `invalidate()`。
+ */
+export interface MiniMaxCredentialSource {
+  readonly region: MiniMaxRegion
+  readonly regionLabel: string
+  readonly baseUrl: string
+  token(signal?: AbortSignal): Promise<string>
+  invalidate(): void
+}
 
 /** 登录态分类。`authorizing` 表示 MiniMax Code 正在等用户在浏览器里完成授权。 */
 export type MiniMaxLoginState = 'ready' | 'authorizing' | 'anonymous' | 'missing' | 'expired' | 'error'
@@ -386,6 +401,39 @@ export class MiniMaxAuth {
     if (!accessToken || expiresAtMs === undefined) return undefined
     const generation = readInteger(first, 'generation')
     return generation === undefined ? { accessToken, expiresAtMs } : { accessToken, expiresAtMs, generation }
+  }
+
+  /**
+   * 读当前登录账号的完整凭据（含 refresh token 与 loginEpoch）。
+   *
+   * 只读 mcode 的文件，绝不写回；镜像成账号副本由 `accounts.ts` 负责。
+   * 取不到返回 `undefined`（文件不存在、记录不完整、字段缺失都算）。
+   */
+  async snapshot(): Promise<MiniMaxLiveCredential | undefined> {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await readFile(this.authJsonPath, 'utf8'))
+    } catch {
+      return undefined
+    }
+    if (!isRecord(parsed) || !isRecord(parsed['records'])) return undefined
+    const first = Object.values(parsed['records']).find((entry) => isRecord(entry))
+    if (!isRecord(first)) return undefined
+    const accessToken = readString(first, 'accessToken')
+    const refreshToken = readString(first, 'refreshToken')
+    const loginEpoch = readString(first, 'loginEpoch')
+    const expiresAtMs = readFiniteNumber(first, 'expiresAtMs')
+    if (accessToken === undefined || refreshToken === undefined || loginEpoch === undefined || expiresAtMs === undefined) {
+      return undefined
+    }
+    const generation = readInteger(first, 'generation')
+    return {
+      loginEpoch,
+      accessToken,
+      refreshToken,
+      expiresAtMs,
+      ...generation === undefined ? {} : { generation },
+    }
   }
 
   private readCache(): CachedToken | undefined {

@@ -36,8 +36,18 @@ import {
   withContextWindow,
 } from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
+import type { MiniMaxCredentialSource } from './auth.ts'
 import { registerMiniMaxStatusRoute } from './status.ts'
 import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } from './status.ts'
+import {
+  accountDisplayNameOf,
+  accountRouteOf,
+  readAccounts,
+  readAccountsSync,
+  syncLiveAccount,
+  writeAccounts,
+} from './accounts.ts'
+import { MiniMaxAccountSource } from './account-source.ts'
 import { PLUGIN_VERSION } from './version.ts'
 
 /** 插件名：同时是 Loader 条目 id 与设置命名空间。 */
@@ -216,30 +226,29 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     },
   })
 
-  for (const region of requestedRegions) {
-    const route = routeForRegion(region)
+  /**
+   * 注册一条路由；已被占用时只 warn。
+   *
+   * @returns 成功时给出可用来注销的 disposer，失败给出 `undefined`。
+   */
+  const registerRoute = (
+    route: string,
+    source: MiniMaxCredentialSource,
+    displayName: string,
+  ): { dispose: () => void } | undefined => {
     const occupied = ctx.llm.listProviders().find(entry => entry.id === route)
     if (occupied !== undefined) {
       warn(
-        `路由 "${route}" 已被其它 provider 注册（显示名 "${occupied.name}"），跳过该区域。`
+        `路由 "${route}" 已被其它 provider 注册（显示名 "${occupied.name}"），跳过。`
         + '请在插件管理器里停用冲突项后重试。',
       )
-      continue
+      return undefined
     }
 
-    const auth = new MiniMaxAuth({ region })
-    const configured = region === 'global' ? config.globalBaseUrl : config.baseUrl
-    const baseUrl = effectiveBaseUrl(configured, regionBaseUrl(region))
-
-    // 常见写法错误：把 SDK 自己要拼的路径写进了 baseUrl，结果是 .../v1/v1/messages。
-    if (baseUrl !== auth.baseUrl && /\/(?:v1|v1\/messages)$/.test(baseUrl)) {
-      warn(`baseUrl 末尾不应包含 "/v1" 或 "/v1/messages"（SDK 会自己拼 /v1/messages），当前为 "${baseUrl}"`)
-    }
-
-    const piProvider = createMiniMaxProvider(auth, models, { baseUrl, route })
+    const piProvider = createMiniMaxProvider(source, models, { baseUrl: source.baseUrl, route })
     const profile: ResolvedPiAiProviderProfile = {
       provider: route,
-      displayName: displayNameForRegion(region),
+      displayName,
       // 宿主未指定档位时的默认值，见 DEFAULT_REASONING_EFFORT 的说明。
       reasoning: DEFAULT_REASONING_EFFORT,
       streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
@@ -256,13 +265,45 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     // 同一个 Map 引用：PiAiAdapter 按引用判断"配置有没有换代"，每次新建 Map
     // 会让它每个请求都重建一次 pi-ai 集合（快照缓存永不命中）。
     const profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile> = new Map([[route, profile]])
-    const adapter = new MiniMaxAdapter(adapterOptions(profiles), auth)
-    ctx.llm.registerAdapter([route], adapter)
+    const adapter = new MiniMaxAdapter(adapterOptions(profiles), source)
+    const registration = ctx.llm.registerAdapter([route], adapter) as {
+      replace?: (adapter: unknown) => void
+      dispose?: () => void
+    } | undefined
+    return { dispose: () => registration?.dispose?.() }
+  }
+
+  /** 本机登录（每个区域一条），也是镜像"当前账号"的来源。 */
+  const liveAuths = new Map<MiniMaxRegion, MiniMaxAuth>()
+
+  for (const region of requestedRegions) {
+    const route = routeForRegion(region)
+    const auth = new MiniMaxAuth({ region })
+    const configured = region === 'global' ? config.globalBaseUrl : config.baseUrl
+    const baseUrl = effectiveBaseUrl(configured, regionBaseUrl(region))
+
+    // 常见写法错误：把 SDK 自己要拼的路径写进了 baseUrl，结果是 .../v1/v1/messages。
+    if (baseUrl !== auth.baseUrl && /\/(?:v1|v1\/messages)$/.test(baseUrl)) {
+      warn(`baseUrl 末尾不应包含 "/v1" 或 "/v1/messages"（SDK 会自己拼 /v1/messages），当前为 "${baseUrl}"`)
+    }
+
+    // 用配置里的 baseUrl 覆盖：`MiniMaxAuth.baseUrl` 是只读的，所以包一层。
+    const source: MiniMaxCredentialSource = baseUrl === auth.baseUrl ? auth : {
+      region: auth.region,
+      regionLabel: auth.regionLabel,
+      baseUrl,
+      token: signal => auth.token(signal),
+      invalidate: () => auth.invalidate(),
+    }
+
+    const registration = registerRoute(route, source, displayNameForRegion(region))
+    if (registration === undefined) continue
+
+    liveAuths.set(region, auth)
     ctx.logger?.info(
       `dsh-connect-minmax: 已注册 provider "${route}"（${displayNameForRegion(region)}，`
       + `${models.length} 个模型，区域 ${auth.regionLabel}，baseUrl ${baseUrl}）`,
     )
-
     registeredRoutes.push({
       route,
       region,
@@ -271,6 +312,86 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       auth: statusAuthOf(auth),
     })
   }
+
+  /**
+   * 账号副本 → 各自的 provider 路由。
+   *
+   * 只注册 `owned`（mcode 已不再持有的账号）：跟随态副本与 mcode 共用同一条
+   * 刷新链，交给插件刷新会把 mcode 挤下线，所以它们只是"镜像"、不出路由。
+   */
+  const copyDisposers = new Map<string, () => void>()
+  const registeredCopyRoutes = new Set<string>()
+
+  const reconcileAccounts = (): void => {
+    const owned = readAccountsSync().filter(account => account.owned)
+
+    for (const [id, dispose] of [...copyDisposers]) {
+      if (owned.some(account => account.id === id)) continue
+      // 副本被删除或不再是 owned：撤掉它的路由，选择器里不留死项。
+      dispose()
+      copyDisposers.delete(id)
+      registeredCopyRoutes.delete(id)
+      const index = registeredRoutes.findIndex(entry => entry.accountId === id)
+      if (index >= 0) registeredRoutes.splice(index, 1)
+    }
+
+    for (const account of owned) {
+      if (copyDisposers.has(account.id)) continue
+      const route = accountRouteOf(account)
+      const source = new MiniMaxAccountSource(account.id, account.region, {
+        baseUrl: effectiveBaseUrl(
+          account.region === 'global' ? config.globalBaseUrl : config.baseUrl,
+          regionBaseUrl(account.region),
+        ),
+      })
+      const registration = registerRoute(route, source, accountDisplayNameOf(account))
+      if (registration === undefined) continue
+      copyDisposers.set(account.id, registration.dispose)
+      registeredCopyRoutes.add(account.id)
+      registeredRoutes.push({
+        route,
+        region: account.region,
+        regionLabel: source.regionLabel,
+        baseUrl: source.baseUrl,
+        auth: accountStatusAuthOf(source),
+        accountId: account.id,
+      })
+      ctx.logger?.info(
+        `dsh-connect-minmax: 已接管账号副本 "${account.label}"（${route}，区域 ${source.regionLabel}）`,
+      )
+    }
+  }
+
+  /**
+   * 把本机登录镜像进副本库。
+   *
+   * 关键规则在 `syncLiveAccount`：同一区域换了账号，旧副本才被标记成 `owned`
+   * （可以接管）；同一次登录只更新凭据，不动 ownership。
+   */
+  const mirrorLive = async (): Promise<void> => {
+    for (const [region, auth] of liveAuths) {
+      const live = await auth.snapshot()
+      if (live === undefined) continue
+      const { accounts, changed } = syncLiveAccount(await readAccounts(), live, region)
+      if (changed) await writeAccounts(accounts)
+    }
+  }
+
+  reconcileAccounts()
+
+  // 镜像 + 对账：先跑一次，之后每 60s 一次。`void` 是因为 apply 是同步的，
+  // 这里不能让启动路径等网络/磁盘。
+  const sync = (): void => {
+    void mirrorLive()
+      .then(() => { reconcileAccounts() })
+      .catch((error: unknown) => { warn(`账号镜像失败：${error instanceof Error ? error.message : String(error)}`) })
+  }
+  sync()
+  ctx.effect(() => {
+    const timer = setInterval(sync, 60_000)
+    timer.unref?.()
+    return () => { clearInterval(timer) }
+  }, 'dsh-connect-minmax: 账号副本镜像')
 
   if (registeredRoutes.length === 0) {
     warn('没有注册任何路由（全部被占用或全部被禁用），插件未生效。')
@@ -287,6 +408,30 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       version: PLUGIN_VERSION,
     })
   })
+}
+
+/**
+ * 账号副本的"只读凭据面"投影：把 `MiniMaxAccountSource.status()` 映射成与
+ * 本机登录同构的 `MiniMaxStatusAuth`，卡片就不用区分两种来源。
+ */
+function accountStatusAuthOf(source: MiniMaxAccountSource): MiniMaxStatusAuth {
+  return {
+    region: source.region,
+    regionLabel: source.regionLabel,
+    baseUrl: source.baseUrl,
+    inspect: async () => {
+      const status = await source.status()
+      if (status === undefined) {
+        return { state: 'missing', source: 'none', detail: '账号副本已不存在（可能被删除）。' }
+      }
+      return {
+        state: status.state === 'owned' ? 'ready' : 'expired',
+        source: 'file',
+        expiresAtMs: status.expiresAtMs,
+        ...status.detail === undefined ? {} : { detail: status.detail },
+      }
+    },
+  }
 }
 
 /**
