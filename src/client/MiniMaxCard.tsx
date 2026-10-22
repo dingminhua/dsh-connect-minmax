@@ -72,15 +72,6 @@ import {
   writeRegions,
 } from './settings.ts'
 
-/**
- * 可选的思考档位。
- *
- * 与宿主侧 `MINIMAX_REASONING_EFFORTS` 一致；**不含 `off`**，因为
- * `MiniMax-M3.1-Flash` 强制思考，把 `off` 设成 provider 级默认值会让宿主在
- * 选中它时直接失败。
- */
-export const MINIMAX_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-
 /** 轮询间隔（毫秒）。 */
 export const MINIMAX_POLL_INTERVAL_MS = 10_000
 
@@ -844,19 +835,16 @@ function ModelPanel(props: {
   onModelContext(modelId: string, window: number): void
   onModelImages(modelId: string, enabled: boolean): void
   onThinkingOff(modelId: string, allow: boolean): void
-  onReasoningEffort(effort: string): void
-  effortOptions: readonly string[]
   onSelectAll(): void
   onTest(modelId: string): void
-  onLongContext(enabled: boolean): void
   onRefresh(): void
   busy: boolean
   message: string | undefined
   t: MiniMaxTranslate
 }): ReactElement {
   const {
-    status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onThinkingOff, onReasoningEffort,
-    effortOptions, onSelectAll, onTest, onLongContext, onRefresh, busy, message, t,
+    status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onThinkingOff,
+    onSelectAll, onTest, onRefresh, busy, message, t,
   } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
@@ -884,31 +872,6 @@ function ModelPanel(props: {
           >
             {t('models.refresh')}
           </button>
-          <label className="dsm-minimax-inline-check" title={canWrite ? t('models.longContextHint') : t('settings.readOnly')}>
-            <input
-              type="checkbox"
-              checked={status.longContext}
-              disabled={!canWrite || busy}
-              onChange={event => { onLongContext((event.target as HTMLInputElement).checked) }}
-            />
-            {t('models.longContext')}
-          </label>
-          {effortOptions.length > 0 && (
-            <label className="dsm-minimax-inline-check" title={canWrite ? t('models.effortHint') : t('settings.readOnly')}>
-              {t('models.effort')}
-              <select
-                value={status.reasoningEffort}
-                disabled={!canWrite || busy}
-                onChange={event => {
-                  onReasoningEffort((event.target as HTMLSelectElement).value)
-                }}
-              >
-                {effortOptions.map(option => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </label>
-          )}
           {!allChecked && (
             <button
               type="button"
@@ -935,7 +898,6 @@ function ModelPanel(props: {
           busy={busy}
           probe={probes[`${region}:${model.id}`]}
           route={testRoute?.route}
-          defaultEffort={status.reasoningEffort}
           onToggle={onToggleModel}
           onModelContext={onModelContext}
           onModelImages={onModelImages}
@@ -963,7 +925,6 @@ function ModelRow(props: {
   busy: boolean
   probe: ModelProbe | undefined
   route: string | undefined
-  defaultEffort: string
   onToggle(modelId: string, enabled: boolean): void
   onModelContext(modelId: string, window: number): void
   onModelImages(modelId: string, enabled: boolean): void
@@ -972,7 +933,7 @@ function ModelRow(props: {
   t: MiniMaxTranslate
 }): ReactElement {
   const {
-    model, enabled, canWrite, busy, probe, route, defaultEffort,
+    model, enabled, canWrite, busy, probe, route,
     onToggle, onModelContext, onModelImages, onThinkingOff, onTest, t,
   } = props
   // 上游能力与"当前是否发图"是两件事：`input` 是被 modelImages 掩码后的结果。
@@ -1058,17 +1019,6 @@ function ModelRow(props: {
       <div className="dsm-minimax-model-meta">
         <span>{t('models.context')} {formatContextWindow(model.contextWindow)}</span>
         <span>{t('models.output')} {formatContextWindow(model.maxTokens)}</span>
-        {/* 思考强度是 **provider 级**的单一默认值：pi-ai 的模型级描述只有"可选
-            档位集合"，没有"每模型默认档"。这里如实显示共用值，而不是画一个
-            改了也不生效的逐模型下拉。 */}
-        <span>
-          {t('models.effort')} <span className="dsm-minimax-meta-tag">{defaultEffort}</span>
-          {' '}
-          {t('models.effortShared')}
-        </span>
-        <span className="dsm-minimax-model-efforts">
-          {t('models.reasoningEfforts')} {model.efforts.join(' / ')}
-        </span>
       </div>
 
       {probe !== undefined && (
@@ -1283,17 +1233,6 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [region, afterWrite])
 
-  const handleReasoningEffort = useCallback(async (effort: string): Promise<void> => {
-    if (settingsScope === undefined) return
-    try {
-      await writeReasoningEffort(settingsScope, effort)
-      setActionMessage(undefined)
-      await afterWrite()
-    } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [settingsScope, afterWrite])
-
   const handleThinkingOff = useCallback(async (modelId: string, allow: boolean): Promise<void> => {
     if (settingsScope === undefined) return
     try {
@@ -1317,17 +1256,6 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
       setActionMessage(caught instanceof Error ? caught.message : String(caught))
     }
   }, [settingsScope, status, afterWrite])
-
-  const handleLongContext = useCallback(async (enabled: boolean): Promise<void> => {
-    if (settingsScope === undefined) return
-    try {
-      await writeLongContext(settingsScope, enabled)
-      setActionMessage(undefined)
-      await afterWrite()
-    } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [settingsScope, afterWrite])
 
   const handleClaim = useCallback(async (): Promise<void> => {
     setBusy(true)
@@ -1429,11 +1357,8 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   onModelContext={(id, window) => { void handleModelContext(id, window) }}
                   onModelImages={(id, wants) => { void handleModelImages(id, wants) }}
                   onThinkingOff={(id, allow) => { void handleThinkingOff(id, allow) }}
-                  onReasoningEffort={effort => { void handleReasoningEffort(effort) }}
-                  effortOptions={MINIMAX_REASONING_EFFORT_OPTIONS}
                   onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
-                  onLongContext={enabled => { void handleLongContext(enabled) }}
                   onRefresh={() => { void load() }}
                   busy={busy}
                   message={actionMessage}

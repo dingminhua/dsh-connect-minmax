@@ -650,7 +650,7 @@ describe('模型行样式与结构一致', () => {
 })
 
 describe('模型页与 Qoder 同款的信息位', () => {
-  it('每个模型行都展示上下文、输出与可选档位', async () => {
+  it('每个模型行只展示上下文与输出（思考强度按用户要求不显示）', async () => {
     mockFetch(payload())
     await mount(writableScope())
     await clickPanel('models')
@@ -658,7 +658,19 @@ describe('模型页与 Qoder 同款的信息位', () => {
     const meta = row?.querySelector('.dsm-minimax-model-meta')?.textContent ?? ''
     expect(meta).toContain('models.context')
     expect(meta).toContain('models.output')
-    expect(meta).toContain('models.reasoningEfforts')
+    expect(meta).not.toContain('models.reasoningEfforts')
+    expect(meta).not.toContain('models.effort')
+  })
+
+  it('面板头不再有「可选 1M」与「默认思考强度」', async () => {
+    mockFetch(payload())
+    await mount(writableScope())
+    await clickPanel('models')
+    const head = container.querySelector('.dsm-minimax-panel-head')?.textContent ?? ''
+    expect(head).not.toContain('models.longContext')
+    expect(head).not.toContain('models.effort')
+    // 刷新按钮还在（这是这一页唯一需要的动作）。
+    expect(head).toContain('models.refresh')
   })
 
   it('底部说明这一页只展示上游公布的能力', async () => {
