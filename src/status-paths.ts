@@ -27,6 +27,8 @@ export const MINIMAX_MODEL_TEST_PATH = '/plugins/dsh-connect-minmax/model/test'
 export const MINIMAX_ACCOUNT_SELECT_PATH = '/plugins/dsh-connect-minmax/account/select'
 /** 重新读取本机登录态、账号副本与积分缓存。 */
 export const MINIMAX_ACCOUNT_REFRESH_PATH = '/plugins/dsh-connect-minmax/account/refresh'
+/** 宿主侧保存端点：真写入在宿主进程里做（workbuddy 同款）。 */
+export const MINIMAX_SETTINGS_SAVE_PATH = '/plugins/dsh-connect-minmax/__save'
 
 /** 本插件注册的 LLM 路由名。 */
 export const MINIMAX_ROUTE = 'minimax'
@@ -442,6 +444,50 @@ function contextWindowOptionsOfRow(row: Record<string, unknown>): number[] {
  * 解析不出任何账号时返回 `undefined`：旧版本宿主不返回这个字段，卡片那时按
  * "只有一个账号"处理，而不是显示一个空池子。
  */
+/**
+ * 认出"哪个命名空间是这个插件"。
+ *
+ * 宿主把 Loader 条目命名成 `include:<短名>`（profile 实测），部署方还可以改安装
+ * 行名，所以**不能按名字猜**；按配置里独有的字段认才稳。宿主侧（保存端点）与
+ * 浏览器侧（惰性作用域）都要用，所以放在这个共享文件里。
+ *
+ * @param value - describe() 里某个命名空间的 value。
+ * @returns 是本插件的命名空间返回 true。
+ */
+export function looksLikeOurNamespace(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return 'modelContextWindows' in row
+    || 'modelImages' in row
+    || ('models' in row && 'regions' in row && 'longContext' in row)
+}
+
+/**
+ * 深度解开 settings 里的**易失引用**。
+ *
+ * `describe()` 返回的 `value` 里，易变字段（dict / 列表）是 `{get(): T}` 的
+ * **活引用**，不是它看起来的那个普通对象。直接展开会把引用函数漏进写入载荷
+ * —— `{ ...{ get(){} } }` 变成 `{ get: <function> }` —— mutate 的严格 JSON
+ * 兼容检查随即以 "found a function at $.ops[0].value.get" 拒绝保存。
+ * 所以合并前必须先深度解包。
+ *
+ * @param value - 任意 settings 值。
+ * @returns 解开引用后的纯数据副本。
+ */
+export function unwrapVolatileDeep<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value
+  if (typeof (value as { get?: unknown }).get === 'function') {
+    return unwrapVolatileDeep((value as unknown as { get: () => unknown }).get()) as T
+  }
+  if (Array.isArray(value)) return value.map(entry => unwrapVolatileDeep(entry)) as T
+  const source = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(source)) {
+    out[key] = unwrapVolatileDeep(source[key])
+  }
+  return out as T
+}
+
 /** 解析"已保存的逐模型覆盖"段。 */
 function parseModelOverrides(value: unknown): MiniMaxModelOverridesView {
   const row = (typeof value === 'object' && value !== null && !Array.isArray(value))

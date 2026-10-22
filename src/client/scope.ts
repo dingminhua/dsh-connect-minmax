@@ -29,13 +29,8 @@ const NAMESPACE_CANDIDATES = [
 ] as const
 
 /** 我们的配置里独有的字段，用来认出"哪个命名空间是这个插件"。 */
-function looksLikeOurNamespace(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const row = value as Record<string, unknown>
-  return 'modelContextWindows' in row
-    || 'modelImages' in row
-    || ('models' in row && 'regions' in row && 'longContext' in row)
-}
+// 命名空间识别在 status-paths.ts：宿主侧保存端点与浏览器侧共用同一份判据。
+import { looksLikeOurNamespace } from '../status-paths.ts'
 
 /**
  * 做一个"用时才解析"的设置写入面。

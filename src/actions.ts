@@ -34,7 +34,9 @@ import {
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_MODEL_TEST_PATH,
+  MINIMAX_SETTINGS_SAVE_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
+  unwrapVolatileDeep,
 } from './status-paths.ts'
 
 export {
@@ -42,6 +44,7 @@ export {
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_MODEL_TEST_PATH,
+  MINIMAX_SETTINGS_SAVE_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
 }
 
@@ -58,6 +61,14 @@ export interface MiniMaxActionDeps {
    * 交给调用方实现，因为"怎么打一发请求"要复用适配器那条真实通路
    * （baseUrl、鉴权头、思考档位），在这里重造一份就等于测了个假链路。
    */
+  /**
+   * 宿主侧保存一个配置字段，返回**真正落盘**的值。
+   *
+   * 浏览器侧 `ConfigForm.set` 在这台宿主上会静默不落盘（workbuddy 的 0.1.7
+   * 缺陷同款）；真写入必须在宿主进程里 `settings.mutate`。端点把拒绝的原始
+   * 异常带回来，所以失败是有名字的，而不是一个被吞掉的 ok:false。
+   */
+  saveField?(field: string, value: unknown): Promise<Record<string, unknown> | undefined>
   testModel(route: string, model: string, signal?: AbortSignal): Promise<MiniMaxModelTestResult>
   /**
    * 把池里某个账号设为某区域的当前账号。
@@ -237,6 +248,27 @@ export function registerMiniMaxActionRoutes(
         const ok = await deps.selectAccount(region, id)
         if (!ok) return json(res, 404, { error: `账号池里没有 ${id}。` })
         return json(res, 200, { ok: true, active: id })
+      } catch (error: unknown) {
+        return json(res, 500, { error: safeMessage(error) })
+      }
+    },
+  }))
+
+  // ---------------------------------------------------------------
+  // POST /__save —— 宿主侧保存配置字段（真写入）
+  // ---------------------------------------------------------------
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: MINIMAX_SETTINGS_SAVE_PATH,
+    handler: async (req, res) => {
+      const body = await guardPost(req, res)
+      if (body === undefined) return
+      if (deps.saveField === undefined) return json(res, 503, { error: 'settings service unavailable to this fiber' })
+      const field = typeof body['field'] === 'string' ? body['field'] : undefined
+      if (field === undefined) return json(res, 400, { error: 'field is required' })
+      try {
+        const value = await deps.saveField(field, body['value'])
+        return json(res, 200, value === undefined ? { ok: true } : { ok: true, value })
       } catch (error: unknown) {
         return json(res, 500, { error: safeMessage(error) })
       }

@@ -44,6 +44,7 @@ import {
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
 import { invalidateAccountCache, registerMiniMaxStatusRoute } from './status.ts'
+import { looksLikeOurNamespace, unwrapVolatileDeep } from './status-paths.ts'
 import type { MiniMaxStatusAuth, MiniMaxStatusContext, MiniMaxStatusRouteDeps } from './status.ts'
 import {
   accountDisplayNameOf,
@@ -619,6 +620,35 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         const auth = liveAuths.get(region)
         if (auth === undefined) throw new Error(`本机没有注册${region === 'global' ? '国际版' : '国内版'}的登录路由。`)
         return auth.token(signal)
+      },
+      saveField: async (field, value) => {
+        // 真写入：在宿主进程里 settings.mutate。浏览器侧 ConfigForm.set 在这台
+        // 宿主上会静默不落盘（workbuddy 0.1.7 缺陷同款），所以保存必须走这里。
+        const settings = (ctx as unknown as { get?(name: string): unknown }).get?.('settings') as
+          | {
+            describe(): Array<{ ns: string, value?: unknown }>
+            mutate(ns: string, ops: Array<{ op: string, path: string[], value: unknown }>, expected?: number): Promise<unknown>
+          }
+          | undefined
+        if (settings === undefined) throw new Error('settings 服务不可用。')
+        const row = settings.describe().find(entry => looksLikeOurNamespace(entry.value))
+        if (row === undefined) throw new Error('describe() 里没有本插件的命名空间。')
+        // 易变字段在 describe() 的 value 里是 {get():T} 活引用：直接展开会把函数
+        // 漏进 mutate 载荷，被严格 JSON 检查拒绝。先深度解包再合并。
+        const current = unwrapVolatileDeep((row.value as Record<string, unknown> | undefined)?.[field] ?? {})
+        const incoming = (typeof value === 'object' && value !== null && !Array.isArray(value))
+          ? unwrapVolatileDeep(value as Record<string, unknown>)
+          : value
+        const merged = Array.isArray(incoming) || typeof incoming !== 'object' || incoming === null
+          ? incoming
+          : { ...(current as Record<string, unknown>), ...(incoming as Record<string, unknown>) }
+        await settings.mutate(row.ns, [{ op: 'set', path: [field], value: merged }], undefined)
+        // 回读真正落盘的值，让卡片镜像真相而不是它自己那份可能过期的镜像。
+        const after = settings.describe().find(entry => entry.ns === row.ns)
+        const stored = unwrapVolatileDeep((after?.value as Record<string, unknown> | undefined)?.[field])
+        return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+          ? stored as Record<string, unknown>
+          : undefined
       },
       refreshAccount: async (region) => {
         // 刷新要真的重新读一遍，而不是让浏览器端重拉缓存：

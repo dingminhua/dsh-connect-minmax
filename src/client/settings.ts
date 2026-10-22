@@ -41,6 +41,8 @@ export interface MiniMaxSettingsScope {
 }
 
 /** 卡片可写的字段名。 */
+import { MINIMAX_SETTINGS_SAVE_PATH } from '../status-paths.ts'
+
 export type MiniMaxWritableField
   = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages'
     | 'modelThinkingOff' | 'reasoningEffort' | 'modelContextWindows'
@@ -91,23 +93,92 @@ function sameList(a: unknown, b: unknown): boolean {
  *
  * @param same - 比对函数：`longContext` 是标量，`models`/`regions` 是数组。
  */
+/**
+ * 走宿主侧保存端点写入，返回**宿主真正落盘**的值。
+ *
+ * 为什么必须有这条路：浏览器侧 `ConfigForm.set` 在部分宿主上会静默不落盘
+ * （workbuddy 的 0.1.7 缺陷同款——scope 解析成功、set 返回 true，文档却一个字
+ * 都没变）。真写入只能在宿主进程里 `settings.mutate`。端点把拒绝的原始异常
+ * 带回来，所以失败是有名字的，而不是一个被吞掉的 ok:false。
+ *
+ * @param field - 配置字段名。
+ * @param value - 要写入的值。
+ * @returns 宿主落盘后的该字段值；旧宿主只回 `{ok:true}` 时为 undefined。
+ * @throws {MiniMaxSettingsWriteError} 端点不可达或拒绝时。
+ */
+async function saveViaHostEndpoint(
+  field: MiniMaxWritableField,
+  value: unknown,
+): Promise<unknown | undefined> {
+  let response: Response
+  try {
+    response = await fetch(MINIMAX_SETTINGS_SAVE_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field, value }),
+    })
+  } catch (error: unknown) {
+    throw new MiniMaxSettingsWriteError(field, `宿主保存端点不可达：${String(error)}`)
+  }
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ error: `HTTP ${String(response.status)}` })) as { error?: string }
+    throw new MiniMaxSettingsWriteError(field, `宿主保存被拒：${String(detail.error ?? response.status)}`)
+  }
+  const answer = await response.json().catch(() => undefined) as { value?: unknown } | undefined
+  return answer?.value
+}
+
+/**
+ * 写一个字段并确认落地。
+ *
+ * **顺序是有意的，搞反会删数据。** 两条写入路径语义不同：
+ *
+ *  - 宿主端点在宿主进程里做**服务端合并**，只改目标字段，不碰兄弟字段；
+ *  - `scope.set` 把**整个字段**交给设置服务，客户端从浏览器镜像合并出来的那份
+ *    会原样替换字段。镜像不是可靠的合并基准（宿主端点写入后不更新它），拿它
+ *    合并就可能把兄弟字段写丢。
+ *
+ * 所以宿主端点优先；`scope.set` 只用于把宿主落盘的值**刷进镜像**，或作为旧宿主
+ * （没有端点）的回退，且回退时必须回读确认真的落地。
+ *
+ * @param same - 比对函数：标量比相等，数组比顺序与内容。
+ */
 async function writeField(
   scope: MiniMaxSettingsScope,
   field: MiniMaxWritableField,
   value: unknown,
   same: (expected: unknown, actual: unknown) => boolean,
 ): Promise<void> {
-  let refused = false
+  // 1. 权威路径：宿主进程内 mutate，服务端合并，不会删兄弟字段。
+  let hostError: unknown
   try {
-    refused = (await scope.set(field, value)) === false
-  } catch {
-    refused = true
+    const authoritative = await saveViaHostEndpoint(field, value)
+    // 2. 把**宿主落盘的值**刷进镜像，而不是用客户端自己那份可能过期的镜像重新
+    //    合并——在"给什么存什么"的 scope 上，写回过期合并会撤销上面的合并。
+    //    尽力而为：宿主已经是权威，刷新被拒没关系。
+    if (authoritative !== undefined) {
+      try { await scope.set(field, authoritative) } catch { /* 可选 */ }
+    }
+    return
+  } catch (error: unknown) {
+    hostError = error
   }
-  if (!refused && same(value, readField(scope, field))) return
-  throw new MiniMaxSettingsWriteError(
-    field,
-    refused ? '设置面板拒绝了这次写入' : '写入后回读到的值与期望不一致',
-  )
+
+  // 3. 端点不可用（旧宿主）：回退到 scope，并回读确认真的落地。
+  let scopeDelivered = false
+  try {
+    scopeDelivered = (await scope.set(field, value)) !== false
+  } catch {
+    scopeDelivered = false
+  }
+  if (scopeDelivered) {
+    if (same(value, readField(scope, field))) return
+    // scope 说成功但回读不一致 = 静默没落盘，这是最危险的假成功，必须点名。
+    throw new MiniMaxSettingsWriteError(field, '设置面板返回成功但回读到的值与期望不一致（值没落地）')
+  }
+  throw hostError instanceof MiniMaxSettingsWriteError
+    ? hostError
+    : new MiniMaxSettingsWriteError(field, '宿主保存端点与设置面板都没能把值落盘')
 }
 
 /** 写入启用的模型列表（顺序即展示顺序）。 */

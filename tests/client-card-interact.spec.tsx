@@ -20,6 +20,7 @@ import {
   MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
+  MINIMAX_SETTINGS_SAVE_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
   MINIMAX_STATUS_PATH,
 } from '../src/status-paths.ts'
@@ -124,6 +125,7 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   posted = []
+  hostStore = {}
 })
 
 afterEach(() => {
@@ -139,6 +141,9 @@ afterEach(() => {
  * 状态是 GET、三个动作是 POST；`status()` 可以随测试推进变化，因为写配置后
  * 卡片会重读一次——断言"点了以后界面跟着变"必须靠这个。
  */
+/** 模拟宿主侧权威存储：__save 端点合并进这里，status 回读也从这里取。 */
+let hostStore: Record<string, unknown> = {}
+
 function mockRoutes(options: {
   status: () => Record<string, unknown>
   claimResult?: { ok: boolean, claimed: boolean, message?: string }
@@ -147,11 +152,24 @@ function mockRoutes(options: {
     const url = String(input)
     const method = init?.method ?? 'GET'
     if (method === 'POST') {
-      posted.push({ path: url, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> })
-      const body = url === MINIMAX_SIGNIN_CLAIM_PATH
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      posted.push({ path: url, body })
+      // 宿主保存端点：模拟真行为——服务端合并进权威值，回 {ok:true, value}。
+      // 卡片拿到 value 后镜像它；scope.writes 记录的是镜像那次 set。
+      if (url === MINIMAX_SETTINGS_SAVE_PATH) {
+        const field = String(body['field'])
+        const incoming = body['value']
+        const storedNow = hostStore[field]
+        const merged = (typeof incoming === 'object' && incoming !== null && !Array.isArray(incoming))
+          ? { ...(typeof storedNow === 'object' && storedNow !== null ? storedNow as Record<string, unknown> : {}), ...incoming as Record<string, unknown> }
+          : incoming
+        hostStore[field] = merged
+        return { ok: true, status: 200, json: async () => ({ ok: true, value: merged }) }
+      }
+      const answer = url === MINIMAX_SIGNIN_CLAIM_PATH
         ? options.claimResult ?? { ok: true, claimed: true, message: '已领取 400 积分。' }
         : { ok: true, removed: 'cn-x' }
-      return { ok: true, status: 200, json: async () => body }
+      return { ok: true, status: 200, json: async () => answer }
     }
     if (url === MINIMAX_STATUS_PATH) {
       return { ok: true, status: 200, json: async () => options.status() }
@@ -607,12 +625,19 @@ describe('保存之后', () => {
 })
 
 describe('写入失败时草稿不丢', () => {
-  it('设置面板拒绝写入 → 草稿保留、给出提示，用户可以再试', async () => {
+  it('宿主端点与设置面板都拒绝 → 草稿保留、给出提示，用户可以再试', async () => {
     const payload = statusPayload()
-    mockRoutes({ status: () => payload })
-    const writes: Array<{ field: string, value: unknown }> = []
+    // 两条写入路径都失败：端点 500、scope.set 返回 false。
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: { method?: string, body?: string }) => {
+      const url = String(input)
+      if (init?.method === 'POST' && url === MINIMAX_SETTINGS_SAVE_PATH) {
+        return { ok: false, status: 500, json: async () => ({ error: 'mutate refused' }) }
+      }
+      if (url === MINIMAX_STATUS_PATH) return { ok: true, status: 200, json: async () => payload }
+      return { ok: false, status: 404, json: async () => ({ error: 'not found' }) }
+    }))
     const scope = {
-      writes,
+      writes: [] as Array<{ field: string, value: unknown }>,
       getSnapshot: () => ({ value: payload }),
       set: async () => false,
     }
