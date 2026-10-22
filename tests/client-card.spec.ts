@@ -14,11 +14,14 @@ import {
   aggregateBadgeToneOf,
   aggregateLabelKeyOf,
   badgeToneOf,
+  copyLabelOf,
   effectiveRoutesOf,
   expiryTextOf,
+  isCopyRoute,
   loginAdviceOf,
   providerLabelOf,
   routeAdviceOf,
+  routeProviderLabelOf,
   sourceLabelKeyOf,
   worstLoginStateOf,
 } from '../src/client/MiniMaxCard.tsx'
@@ -284,5 +287,133 @@ describe('providerLabelOf', () => {
 
   it('不认识的路由名原样显示，不编名字', () => {
     expect(providerLabelOf('minimax-future', t)).toBe('minimax-future')
+  })
+})
+
+/**
+ * 造一条**账号副本**路由。
+ *
+ * 宿主那边副本的路由名是 `minimax-<region>-<短 id>`（`accountRouteOf`），
+ * 并且带 `accountId`；本机登录没有 `accountId`。测试要跟这份契约对齐，
+ * 否则卡片会对着一个宿主永远不会发出的形状变绿。
+ */
+function copyRouteOf(
+  route: string,
+  region: 'cn' | 'global',
+  login: MiniMaxLoginView,
+  accountId: string,
+): MiniMaxRouteView {
+  return { ...routeOf(route, region, login), accountId }
+}
+
+/**
+ * 带参数插值的假翻译函数。
+ *
+ * 副本的供应商名与建议语都靠 `{label}` 带出短 id，用忽略参数的 `t` 断言
+ * 就看不见**参数本身**——而"显示成整条路由名"恰恰是最容易错的地方。
+ */
+const tp = (key: string, params?: Record<string, unknown>): string => {
+  const label = params?.['label']
+  return label === undefined ? `zh:${key}` : `zh:${key}:${String(label)}`
+}
+
+describe('isCopyRoute', () => {
+  it('判据是 accountId，不是路由名的形状', () => {
+    // 本机登录：没有 accountId，即便路由名里带得出一样的后缀也不算副本。
+    expect(isCopyRoute(routeOf('minimax', 'cn', { state: 'ready', source: 'lease' }))).toBe(false)
+    expect(isCopyRoute(copyRouteOf(
+      'minimax-cn-cfd703e1',
+      'cn',
+      { state: 'ready', source: 'file' },
+      'cn-cfd703e1',
+    ))).toBe(true)
+  })
+})
+
+describe('copyLabelOf', () => {
+  it('本机登录 → undefined（不显示副本相关的一切）', () => {
+    expect(copyLabelOf(routeOf('minimax', 'cn', { state: 'ready', source: 'lease' }))).toBeUndefined()
+    expect(copyLabelOf(routeOf('minimax-global', 'global', { state: 'ready', source: 'lease' }))).toBeUndefined()
+  })
+
+  it('副本 → 取 id 最后一段当短 id', () => {
+    expect(copyLabelOf(copyRouteOf(
+      'minimax-cn-cfd703e1', 'cn', { state: 'ready', source: 'file' }, 'cn-cfd703e1',
+    ))).toBe('cfd703e1')
+    expect(copyLabelOf(copyRouteOf(
+      'minimax-global-058de9a6', 'global', { state: 'ready', source: 'file' }, 'global-058de9a6',
+    ))).toBe('058de9a6')
+  })
+
+  it('短 id 退化成像区域名时显示整个 id，不显示和区域列重复的东西', () => {
+    expect(copyLabelOf(copyRouteOf(
+      'minimax-cn', 'cn', { state: 'expired', source: 'file' }, 'cn',
+    ))).toBe('cn')
+    expect(copyLabelOf(copyRouteOf(
+      'minimax-global', 'global', { state: 'expired', source: 'file' }, 'global',
+    ))).toBe('global')
+  })
+
+  it('accountId 存在但为空串时回落到路由名的最后一段', () => {
+    // 收窄函数只接受非空字符串，所以真实宿主发不出空串；这条钉的是**函数自己**
+    // 别在这种情况下返回一个空 label（渲染出 "MiniMax 副本 · " 这种半截话）。
+    expect(copyLabelOf(copyRouteOf(
+      'minimax-cn-abc12345', 'cn', { state: 'ready', source: 'file' }, '',
+    ))).toBe('abc12345')
+  })
+})
+
+describe('routeProviderLabelOf', () => {
+  it('本机登录沿用原来的供应商名', () => {
+    expect(routeProviderLabelOf(
+      routeOf('minimax', 'cn', { state: 'ready', source: 'lease' }), tp,
+    )).toBe('zh:provider.minimax')
+    expect(routeProviderLabelOf(
+      routeOf('minimax-global', 'global', { state: 'ready', source: 'lease' }), tp,
+    )).toBe('zh:provider.minimaxGlobal')
+  })
+
+  it('副本的供应商名是 MiniMax 副本 · <短 id>', () => {
+    expect(routeProviderLabelOf(
+      copyRouteOf('minimax-cn-cfd703e1', 'cn', { state: 'ready', source: 'file' }, 'cn-cfd703e1'), tp,
+    )).toBe('zh:provider.minimaxCopy:cfd703e1')
+  })
+
+  it('国际版的副本用国际版那份文案，不混进国内版分组名', () => {
+    expect(routeProviderLabelOf(
+      copyRouteOf('minimax-global-058de9a6', 'global', { state: 'ready', source: 'file' }, 'global-058de9a6'), tp,
+    )).toBe('zh:provider.minimaxGlobalCopy:058de9a6')
+  })
+})
+
+describe('routeAdviceOf 账号副本', () => {
+  const dead = { state: 'expired' as const, source: 'file' as const, detail: 'refresh token 已作废（invalid_grant）' }
+  const alive = { state: 'expired' as const, source: 'file' as const }
+
+  it('副本过期且带 detail → 说清刷新凭据失效、要重新登录让插件重新镜像', () => {
+    expect(routeAdviceOf(
+      copyRouteOf('minimax-cn-cfd703e1', 'cn', dead, 'cn-cfd703e1'), tp,
+    )).toBe('zh:advice.copy.expiredDead:cfd703e1')
+    expect(routeAdviceOf(
+      copyRouteOf('minimax-global-058de9a6', 'global', dead, 'global-058de9a6'), tp,
+    )).toBe('zh:advice.copy.expiredDead:058de9a6')
+  })
+
+  it('副本过期但没 detail → 还能续，不许把用户支去重新登录', () => {
+    expect(routeAdviceOf(
+      copyRouteOf('minimax-cn-cfd703e1', 'cn', alive, 'cn-cfd703e1'), tp,
+    )).toBe('zh:advice.copy.expired:cfd703e1')
+  })
+
+  it('副本就绪不给建议语（卡片只为未就绪的路由画建议行）', () => {
+    // 走到通用分支：ready + file → 沿用 readyFile，不引入无人消费的副本文案。
+    expect(routeAdviceOf(
+      copyRouteOf('minimax-cn-cfd703e1', 'cn', { state: 'ready', source: 'file' }, 'cn-cfd703e1'), tp,
+    )).toBe('zh:advice.readyFile')
+  })
+
+  it('本机登录的过期建议不受副本分支影响', () => {
+    expect(routeAdviceOf(routeOf('minimax', 'cn', alive), tp)).toBe('zh:advice.cn.expired')
+    expect(routeAdviceOf(routeOf('minimax-global', 'global', alive), tp)).toBe('zh:advice.global.expired')
   })
 })

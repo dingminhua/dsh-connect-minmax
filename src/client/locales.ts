@@ -54,6 +54,11 @@ export const en = {
   'advice.global.expired': 'Global edition: the sign-in expired. Sign in again in MiniMax Code with a Global-edition account.',
   'advice.global.authorizing': 'Global edition: MiniMax Code is waiting for your approval. Finish the device-code prompt, then reload this card.',
 
+  // 账号副本（插件自己续期的旧账号）的两档过期建议。两者必须说清**谁来续期**：
+  // 副本早就不在 MiniMax Code 手里，所以不带 detail 时不该叫用户去登录。
+  'advice.copy.expired': 'Account copy {label}: the token expired and the plugin has not renewed it yet. MiniMax Code no longer holds this account, so the plugin renews it by itself — reload this card instead of signing in again.',
+  'advice.copy.expiredDead': 'Account copy {label}: its refresh credential is no longer valid (did you sign out of this account in MiniMax Code?), so the plugin cannot renew it. Sign in with that account again in MiniMax Code so the plugin can mirror it as a fresh copy.',
+
   'promise.noApiKey': 'This plugin never reads, asks for, or stores an API key — the credential always comes from the local sign-in.',
 
   'region.label': 'Region',
@@ -69,8 +74,12 @@ export const en = {
   'routes.expires': 'Expires',
   'routes.allReady': 'All routes are signed in',
   'routes.anyReady': 'At least one route is signed in',
+  'routes.copy': 'copy',
+  'routes.copyHint': 'MiniMax Code holds one signed-in account per region. When you switch accounts, the plugin keeps the previous one and renews it on its own, so both accounts work at the same time.',
   'provider.minimax': 'MiniMax',
   'provider.minimaxGlobal': 'MiniMax Global',
+  'provider.minimaxCopy': 'MiniMax copy · {label}',
+  'provider.minimaxGlobalCopy': 'MiniMax Global copy · {label}',
 
   'models.label': 'Models',
   'models.count': '{count} models',
@@ -136,6 +145,11 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'advice.global.expired': '国际版：登录已过期。请在 MiniMax Code 中用国际版账号重新登录。',
   'advice.global.authorizing': '国际版：MiniMax Code 正在等你完成授权。请完成设备码授权，然后刷新这张卡片。',
 
+  // 账号副本（插件自己续期的旧账号）的两档过期建议。两者必须说清**谁来续期**：
+  // 副本早就不在 MiniMax Code 手里，所以不带 detail 时不该叫用户去登录。
+  'advice.copy.expired': '账号副本 {label}：token 已过期，插件还没续上。这个账号 MiniMax Code 已经不再持有，续期由插件自己完成——请刷新这张卡片，不需要重新登录。',
+  'advice.copy.expiredDead': '账号副本 {label}：刷新凭据已失效（你在 MiniMax Code 里登出过这个账号？），插件无法再替它续期。请在 MiniMax Code 里重新登录该账号，让插件重新镜像一份新的副本。',
+
   'promise.noApiKey': '本插件不读取、不索取、也不保存任何 API Key —— 凭据始终来自本机登录态。',
 
   'region.label': '区域',
@@ -151,8 +165,12 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'routes.expires': '到期',
   'routes.allReady': '全部路由都已登录',
   'routes.anyReady': '至少一条路由已登录',
+  'routes.copy': '副本',
+  'routes.copyHint': 'MiniMax Code 每个区域只能登录一个账号；你换账号后，插件会接管旧账号自己续期，于是两个账号可以同时用。',
   'provider.minimax': 'MiniMax',
   'provider.minimaxGlobal': 'MiniMax Global',
+  'provider.minimaxCopy': 'MiniMax 副本 · {label}',
+  'provider.minimaxGlobalCopy': 'MiniMax Global 副本 · {label}',
 
   'models.label': '模型',
   'models.count': '{count} 个模型',

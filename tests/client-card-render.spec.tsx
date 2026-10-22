@@ -23,12 +23,14 @@ import type { MiniMaxTranslate } from '../src/client/MiniMaxCard.tsx'
 /**
  * 一个把 key 原样返回的翻译函数，便于断言文案键。
  *
- * 带参数的键（验证码等）把参数拼在后面，这样断言才能看见**参数本身**——
+ * 带参数的键（验证码、副本短 id 等）把参数拼在后面，这样断言才能看见**参数本身**——
  * 真实 locale 会做同样的插值。
  */
 const t: MiniMaxTranslate = (key, params) => {
   const code = params?.['code']
-  return code === undefined ? key : `${key}:${String(code)}`
+  const label = params?.['label']
+  if (code !== undefined) return `${key}:${String(code)}`
+  return label === undefined ? key : `${key}:${String(label)}`
 }
 
 const MODELS = [
@@ -71,6 +73,28 @@ function payload(overrides: Record<string, unknown> = {}): Record<string, unknow
 /** 旧版本应答：没有 `routes` 字段。 */
 function legacyPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return payload({ routes: [], ...overrides })
+}
+
+/** 从一份 payload 里取出 routes，便于"两条本机登录 + 若干副本"地拼路由。 */
+function routesOf(body: Record<string, unknown>): Record<string, unknown>[] {
+  return (body['routes'] as Record<string, unknown>[]).map(route => ({ ...route }))
+}
+
+/** 造一条**本机登录**路由（不带 `accountId`，这是副本判据的另一半）。 */
+function routeOfState(
+  route: string,
+  region: 'cn' | 'global',
+  login: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    route,
+    region,
+    regionLabel: region === 'global' ? '国际版' : '国内版',
+    baseUrl: region === 'global'
+      ? 'https://api.minimax.io/v1/llm'
+      : 'https://agent.minimax.cn/mavis/api/v1/llm',
+    login,
+  }
 }
 
 let container: HTMLDivElement
@@ -301,5 +325,164 @@ describe('MiniMaxCard 多路由渲染', () => {
     expect(html).toContain('dsm-minimax-card')
     expect(html).toContain('login.anonymous')
     expect(html).toContain('advice.cn.signInRequired')
+  })
+})
+
+/**
+ * 账号副本。
+ *
+ * 宿主那边副本是一条**独立注册**的 provider 路由：路由名 `minimax-<区域>-<短 id>`、
+ * 带 `accountId`、续期由插件自己负责（所以 `source` 是 `file`，不是 `lease`）。
+ * 测试用这份形状，而不是随手编一个能渲染的物件。
+ */
+function copyRoute(options: {
+  short: string
+  region: 'cn' | 'global'
+  login: Record<string, unknown>
+}): Record<string, unknown> {
+  const route = `minimax-${options.region}-${options.short}`
+  return {
+    route,
+    accountId: `${options.region}-${options.short}`,
+    region: options.region,
+    regionLabel: options.region === 'global' ? '国际版' : '国内版',
+    baseUrl: options.region === 'global'
+      ? 'https://api.minimax.io/v1/llm'
+      : 'https://agent.minimax.cn/mavis/api/v1/llm',
+    login: options.login,
+  }
+}
+
+describe('MiniMaxCard 账号副本渲染', () => {
+  it('副本行：供应商名带短 id，区域列后面有「副本」角标', async () => {
+    mockFetch(payload({
+      routes: [
+        ...routesOf(payload()),
+        copyRoute({ short: 'cfd703e1', region: 'cn', login: { state: 'ready', source: 'file', expiresAtMs: Date.now() + 3_600_000 } }),
+      ],
+    }))
+    await mount()
+    const html = container.innerHTML
+    // 供应商列：MiniMax 副本 · cfd703e1（t 把 label 拼在键后面）。
+    expect(html).toContain('provider.minimaxCopy:cfd703e1')
+    // 本机登录那两行不受影响。
+    expect(html).toContain('provider.minimax')
+    expect(html).toContain('provider.minimaxGlobal')
+    // 「副本」角标只出现在副本行，且复用现有 chip 样式（styles.ts 不在改动范围内）。
+    expect(html).toContain('routes.copy')
+    expect(html).toContain('dsm-minimax-chip dsm-minimax-chip-on')
+    expect(html).toContain('minimax-cn-cfd703e1')
+  })
+
+  it('本机登录行没有「副本」角标，也没有副本供应商名', async () => {
+    mockFetch(payload())
+    await mount()
+    const html = container.innerHTML
+    expect(html).not.toContain('routes.copy')
+    expect(html).not.toContain('provider.minimaxCopy')
+    expect(html).not.toContain('provider.minimaxGlobalCopy')
+  })
+
+  it('有副本时，路由表下方给出说明；没有副本时不给（免得让人以为漏配）', async () => {
+    mockFetch(payload({ routes: [copyRoute({ short: 'cfd703e1', region: 'cn', login: { state: 'ready', source: 'file' } })] }))
+    await mount()
+    expect(container.innerHTML).toContain('routes.copyHint')
+
+    // 换一份"没有副本"的应答：重新挂载同一棵树，说明语应当消失。
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    mockFetch(payload())
+    await mount()
+    expect(container.innerHTML).not.toContain('routes.copyHint')
+  })
+
+  it('国际版副本用国际版那份供应商文案', async () => {
+    mockFetch(payload({
+      routes: [copyRoute({
+        short: '058de9a6',
+        region: 'global',
+        login: { state: 'ready', source: 'file' },
+      })],
+    }))
+    await mount()
+    const html = container.innerHTML
+    expect(html).toContain('provider.minimaxGlobalCopy:058de9a6')
+    expect(html).not.toContain('provider.minimaxCopy:')
+    expect(html).toContain('region.global')
+    expect(html).toContain('routes.copy')
+  })
+
+  it('副本 expired 且带 detail → 建议语说明刷新凭据已失效、要重新登录让插件重新镜像', async () => {
+    mockFetch(payload({
+      routes: [
+        routeOfState('minimax', 'cn', { state: 'ready', source: 'lease' }),
+        copyRoute({
+          short: 'cfd703e1',
+          region: 'cn',
+          login: {
+            state: 'expired',
+            source: 'file',
+            expiresAtMs: Date.now() - 1_000,
+            detail: 'refresh token 已作废（invalid_grant）',
+          },
+        }),
+      ],
+    }))
+    await mount()
+    const html = container.innerHTML
+    expect(html).toContain('advice.copy.expiredDead:cfd703e1')
+    expect(html).toContain('login.expired')
+    // 不该把用户支去"去 MiniMax Code 重新登录国内版"那条通用建议上。
+    expect(html).not.toContain('advice.cn.expired')
+    // 聚合徽标逻辑不变：另有一条 ready 路由 → 仍是绿色。
+    expect(html).toContain('dsm-minimax-badge-ready')
+    expect(html).toContain('routes.anyReady')
+  })
+
+  it('副本 expired 但没 detail → 用"还能续、刷新卡片"那条建议', async () => {
+    mockFetch(payload({
+      routes: [
+        routeOfState('minimax', 'cn', { state: 'ready', source: 'lease' }),
+        copyRoute({
+          short: 'cfd703e1',
+          region: 'cn',
+          login: { state: 'expired', source: 'file', expiresAtMs: Date.now() - 1_000 },
+        }),
+      ],
+    }))
+    await mount()
+    const html = container.innerHTML
+    expect(html).toContain('advice.copy.expired:cfd703e1')
+    expect(html).not.toContain('advice.copy.expiredDead')
+    expect(html).not.toContain('advice.cn.expired')
+  })
+
+  it('副本就绪时不额外画建议行（只有未就绪的路由才有）', async () => {
+    mockFetch(payload({
+      routes: [
+        routeOfState('minimax', 'cn', { state: 'ready', source: 'lease' }),
+        copyRoute({ short: 'cfd703e1', region: 'cn', login: { state: 'ready', source: 'file' } }),
+      ],
+    }))
+    await mount()
+    const html = container.innerHTML
+    expect(html).toContain('routes.allReady')
+    expect(html).not.toContain('advice.copy')
+    // 就绪副本的 ready 徽标只出现在路由表里，整张卡没有多余的建议段落。
+    expect(html).toContain('dsm-minimax-badge-ready')
+  })
+
+  it('两条同区域副本各自显示自己的短 id，不互相覆盖', async () => {
+    mockFetch(payload({
+      routes: [
+        routeOfState('minimax', 'cn', { state: 'ready', source: 'lease' }),
+        copyRoute({ short: 'cfd703e1', region: 'cn', login: { state: 'ready', source: 'file' } }),
+        copyRoute({ short: 'aa11bb22', region: 'cn', login: { state: 'ready', source: 'file' } }),
+      ],
+    }))
+    await mount()
+    const html = container.innerHTML
+    expect(html).toContain('provider.minimaxCopy:cfd703e1')
+    expect(html).toContain('provider.minimaxCopy:aa11bb22')
   })
 })

@@ -226,13 +226,75 @@ export function providerLabelOf(route: string, t: MiniMaxTranslate): string {
 }
 
 /**
+ * 这条路由是不是**账号副本**（插件自己续期的旧账号）。
+ *
+ * 判据只有一个：宿主在副本路由上透传 `accountId`，本机登录没有这个字段。
+ * 所以认 `accountId`，**不去解析路由名的形状** —— 路由名是宿主那边的命名
+ * 约定（`minimax-<region>-<短 id>`），改名的权利在宿主，而 `accountId` 的
+ * 存在与否是这份契约里唯一的判据。
+ */
+export function isCopyRoute(route: MiniMaxRouteView): boolean {
+  return route.accountId !== undefined
+}
+
+/** 取一个 id 最后一段 `-` 分隔的非空片段。 */
+function lastDashSegment(value: string): string | undefined {
+  const parts = value.split('-')
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
+    if (part !== undefined && part !== '') return part
+  }
+  return undefined
+}
+
+/**
+ * 副本的**短 id**：`minimax-cn-cfd703e1` → `cfd703e1`。本机登录 → undefined。
+ *
+ * 副本 id 形如 `cn-cfd703e1`（区域 + 登录指纹前 8 位），取最后一段就足够区分
+ * 同一区域里的两个账号。最后一段退化成像区域名（`cn` / `global`）时宁可显示
+ * 整个 id：一个和区域列重复的"短 id"没有任何区分度，只会让人以为读错了列。
+ */
+export function copyLabelOf(route: MiniMaxRouteView): string | undefined {
+  const accountId = route.accountId
+  if (accountId === undefined) return undefined
+  const short = lastDashSegment(accountId) ?? lastDashSegment(route.route)
+  if (short !== undefined && short !== 'cn' && short !== 'global') return short
+  return accountId === '' ? route.route : accountId
+}
+
+/**
+ * 「路由」表里**供应商列**要显示的名字。
+ *
+ * 本机登录沿用 {@link providerLabelOf}；副本带上 `副本 · <短 id>`，因为模型
+ * 选择器里那是第三个分组，用户必须能一眼看出它是**谁的**账号。
+ */
+export function routeProviderLabelOf(route: MiniMaxRouteView, t: MiniMaxTranslate): string {
+  const label = copyLabelOf(route)
+  if (label === undefined) return providerLabelOf(route.route, t)
+  return t(route.region === 'global' ? 'provider.minimaxGlobalCopy' : 'provider.minimaxCopy', { label })
+}
+
+/**
  * 一条路由的"你需要做什么"。
  *
  * 与顶层的 {@link loginAdviceOf} 同一套逻辑，但**区分区域**：国内版与国际版
  * 是两个不同的账号，"去登录"要说清是去登录哪个。
+ *
+ * 副本要单独走一条岔路，理由正是这张卡片最要紧的那件事——**下一步做什么**：
+ * 副本早就不在 MiniMax Code 手里了，过期时叫用户"去 MiniMax Code 重新登录"
+ * 会把人支到别处去（该刷新的插件自己会刷，只有刷新凭据作废时才真的要重新登录）：
+ *  - 副本 + `expired`（无 detail）→ token 过期但还能续，刷新这张卡片即可；
+ *  - 副本 + `expired` + `detail` → 刷新凭据已作废，插件续不动，只能重新登录
+ *    该账号让插件重新镜像一份新副本。
+ * 副本就绪时**不给建议语**：卡片只为未就绪的路由画建议行，就绪副本在表里
+ * 已经有「副本 · <短 id>」的供应商名与角标，再加一句废话只会稀释重点。
  */
 export function routeAdviceOf(route: MiniMaxRouteView, t: MiniMaxTranslate): string {
   const region = route.region === 'global' ? 'global' : 'cn'
+  const label = copyLabelOf(route)
+  if (label !== undefined && route.login.state === 'expired') {
+    return t(route.login.detail === undefined ? 'advice.copy.expired' : 'advice.copy.expiredDead', { label })
+  }
   switch (route.login.state) {
     case 'ready':
       return route.login.source === 'lease'
@@ -429,11 +491,16 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
                     <td>
                       <div className="dsm-minimax-model-id">{route.route}</div>
                       <div className="dsm-minimax-model-name">
-                        {providerLabelOf(route.route, translate)}
+                        {routeProviderLabelOf(route, translate)}
                       </div>
                     </td>
                     <td title={route.regionLabel}>
                       {translate(route.region === 'global' ? 'region.global' : 'region.cn')}
+                      {isCopyRoute(route) && (
+                        <span className="dsm-minimax-chip dsm-minimax-chip-on" style={{ marginLeft: 6 }}>
+                          {translate('routes.copy')}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <span className={`dsm-minimax-badge dsm-minimax-badge-${badgeToneOf(route.login.state)}`}>
@@ -463,6 +530,13 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
                 ))}
               </tbody>
             </table>
+            {/* 账号副本是什么：一句小字解释，紧贴路由表。只在**真的有副本**时才出现——
+                没有副本时解释一个不存在的概念，只会让新用户以为漏配了什么。 */}
+            {routes.some(isCopyRoute) && (
+              <p className="dsm-minimax-hint" style={{ marginTop: '8px' }}>
+                {translate('routes.copyHint')}
+              </p>
+            )}
           </div>
         )}
 
