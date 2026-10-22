@@ -16,10 +16,10 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import type { MiniMaxRegion } from './catalog.ts'
+import { routeForRegion, type MiniMaxRegion } from './catalog.ts'
 import { claimSignin, fetchSigninStatus } from './credits.ts'
-import { readAccounts, writeAccounts } from './accounts.ts'
-import { isLoopbackRequest, json, safeMessage } from './status.ts'
+import { accountRouteOf, readAccounts, writeAccounts } from './accounts.ts'
+import { invalidateAccountCache, isLoopbackRequest, json, safeMessage } from './status.ts'
 
 /** 动作路由的挂载点。 */
 
@@ -169,6 +169,9 @@ export function registerMiniMaxActionRoutes(
         }
         const outcome = await claimSignin(region, token)
         deps.log?.(`signin claim (${region}) → claimed=${outcome.claimed}`)
+        // 卡片紧接着就会重读状态；不清缓存的话它拿到的是 60 秒内的旧读数——
+        // 按钮继续亮着、余额不动，用户以为没生效（真实反馈过的现象）。
+        invalidateAccountCache(routeForRegion(region))
         return json(res, outcome.ok ? 200 : 502, outcome)
       } catch (error: unknown) {
         return json(res, 502, { ok: false, claimed: false, error: safeMessage(error) })
@@ -193,6 +196,9 @@ export function registerMiniMaxActionRoutes(
         if (target === undefined) return json(res, 404, { error: `账号副本 ${id} 不存在。` })
         // 只删插件自己库里的这一条：MiniMax Code 的凭据文件从不被本插件写入。
         await writeAccounts(accounts.filter(account => account.id !== id))
+        // 该副本可能正被池选为当前账号；它的积分数也随路由一起消失，别留在缓存里。
+        invalidateAccountCache(accountRouteOf(target))
+        invalidateAccountCache(routeForRegion(target.region))
         deps.log?.(`removed account copy ${id} (${target.region}, owned=${target.owned})`)
         return json(res, 200, { ok: true, removed: id })
       } catch (error: unknown) {

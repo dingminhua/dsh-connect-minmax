@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   buildMiniMaxStatus,
   inspectWithTimeout,
+  invalidateAccountCache,
   isLoopbackRequest,
   MINIMAX_STATUS_PATH,
   MINIMAX_STATUS_TIMEOUT_MS,
@@ -102,6 +103,34 @@ describe('账户信息（积分 / 签到）', () => {
     const calls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length
     await buildMiniMaxStatus(deps, 1_700_000_000_000 + 10_000)
     expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length).toBe(calls)
+    vi.unstubAllGlobals()
+  })
+
+  it('领取之后清掉缓存，立刻重读就能看到新余额（这是"领了没刷新"的回归）', async () => {
+    resetAccountCache()
+    let balance = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+      const url = String(input)
+      const body = url.includes('get_membership_info')
+        ? { op_credit_summary: { total_remaining_amount: balance } }
+        : url.includes('credit/details')
+          ? { credits: [] }
+          : { days: [] }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const deps = depsStub({ routes: [routeStub({ auth: authStub(), accountToken: async () => 'mmoat_x' })] })
+    const before = await buildMiniMaxStatus(deps, 1_700_000_000_000)
+    expect(before.routes[0]?.credits?.balance?.totalRemaining).toBe(0)
+
+    // 领取到账，但还没清缓存：卡片重读仍是 0 —— 用户看到的就是"没刷新"。
+    balance = 400
+    const stale = await buildMiniMaxStatus(deps, 1_700_000_000_000 + 5_000)
+    expect(stale.routes[0]?.credits?.balance?.totalRemaining).toBe(0)
+
+    // 清掉这条路由的缓存后立刻可见。
+    invalidateAccountCache('minimax')
+    const fresh = await buildMiniMaxStatus(deps, 1_700_000_000_000 + 10_000)
+    expect(fresh.routes[0]?.credits?.balance?.totalRemaining).toBe(400)
     vi.unstubAllGlobals()
   })
 

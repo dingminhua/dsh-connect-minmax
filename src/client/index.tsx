@@ -22,6 +22,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 
 import { MiniMaxCard } from './MiniMaxCard.tsx'
+import { createLazySettingsScope } from './scope.ts'
 import type { MiniMaxSettingsScope } from './settings.ts'
 import type { MiniMaxCardInjected } from './MiniMaxCard.tsx'
 import { en, zh } from './locales.ts'
@@ -60,35 +61,24 @@ export function apply(ctx: MiniMaxClientContext): void {
     const t = ctx.locale.bind(namespace) as MiniMaxCardInjected['t']
 
     /**
-     * 软探测设置写入面。
+     * 设置写入面（惰性解析）。
      *
      * `configForms` **不进 `inject`**：Cordis 的依赖门禁是硬的，写进去就会
      * 让"宿主不提供该服务"变成"整个客户端插件一次都不跑"。拿不到时
      * `settingsScope` 是 undefined，卡片自动退化成只读——保存是唯一需要它的功能。
+     *
+     * 之前是"apply 时解析一次就定下来"，那是模型勾选存不进去的真因：卡片挂载
+     * 那一刻 `configForms` 的 describe 镜像通常还是 `idle`（`view` 为空），于是
+     * 退化成猜的命名空间 `dsh-connect-minmax`；宿主的真实 entry id 不是它，
+     * `get()` 拿到的是一个不存在的条目，`set()` 自然永远是 false——界面看起来
+     * 能点，实际一条都没写进去。
+     *
+     * 现在每次用的时候现解析，并订阅 describe 镜像：命名空间晚出现也能拿到。
+     * 认哪个命名空间**看 schema 里的字段**而不是猜名字最稳妥——我们的配置里
+     * `modelContextWindows` / `reasoningEffort` 是独有的，部署方把安装行改叫
+     * 什么都不会认错。
      */
-    let settingsScope: MiniMaxSettingsScope | undefined
-    try {
-      const forms = (ctx as unknown as {
-        get?(name: string): unknown
-      }).get?.('configForms') as {
-        describe(): { getSnapshot(): { view?: { namespaces?: { ns: string }[] } } }
-        get(ns: string): unknown
-      } | undefined
-      if (forms !== undefined) {
-        // 命名空间是宿主 Loader 的 entry id，问镜像而不是猜名字：部署方可以把
-        // 安装行命名成任何样子，猜错的结果是"卡片在，但所有控件都是死的"。
-        let ns = 'dsh-connect-minmax'
-        try {
-          const namespaces = forms.describe().getSnapshot().view?.namespaces ?? []
-          const served = namespaces.find(entry => entry.ns === ns || /minimax?/i.test(entry.ns))
-          if (served !== undefined) ns = served.ns
-        } catch { /* 镜像没就绪：声明的 id 仍然是对的 */ }
-        settingsScope = forms.get(ns) as MiniMaxSettingsScope | undefined
-      }
-    } catch (error: unknown) {
-      console.error('[dsh-connect-minmax] settings surface unavailable (card is read-only):', error)
-    }
-
+    const settingsScope = createLazySettingsScope(ctx)
     /**
      * 注册一张卡片。
      *

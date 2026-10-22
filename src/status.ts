@@ -411,9 +411,22 @@ interface AccountRead {
  */
 const accountCache = new Map<string, AccountRead>()
 
-/** 清缓存（测试用）。 */
+/** 清空全部账户缓存（测试用）。 */
 export function resetAccountCache(): void {
   accountCache.clear()
+}
+
+/**
+ * 只清一条路由的账户缓存。
+ *
+ * 领取签到、删除副本这类**写动作**之后必须清：卡片会立刻重读状态，而缓存窗口
+ * 是 60 秒——不清的话用户点了"领取今天"，按钮继续亮着、余额纹丝不动，看起来
+ * 像没生效。而且这条陈旧余额还会回灌给账号池，让一个其实有钱的账号被当成没钱。
+ *
+ * @param route - 路由名。
+ */
+export function invalidateAccountCache(route: string): void {
+  accountCache.delete(route)
 }
 
 /**
