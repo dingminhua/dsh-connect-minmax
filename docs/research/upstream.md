@@ -592,7 +592,46 @@ X-Group-Id: <groupId>
 `projectQuota(body, modelName)` 把响应投影成 `{status, reason?, ...}`，状态值含 `unknown` / `not-applicable`（未订阅）/ 正常额度。
 `groupId` 来自 §6.1 的 `membership.groupId`。
 
-**结论**：额度查询端点存在，但签名算法（md5 + 固定盐 `I*7Cf%WZ#S&%1RlZJ&C2`）需要复刻，优先级低；建议插件 v1 **不做**额度查询。
+**结论（2026-10-22 实测推翻上文判断）**：额度与签到端点**不需要** Matrix 签名头，只带
+`Authorization: Bearer <mmoat_…>` 就够。上文的签名算法是客户端另一条路径的要求，与这三条接口无关，
+因此"建议 v1 不做额度查询"作废——见 §6.3。
+
+### 6.3 积分余额 / 批次到期 / 每日签到（实测通过，2026-10-22）
+
+用本机镜像出来的新鲜 `mmoat_` 令牌实测（只读，未调用 claim）：
+
+```
+POST https://agent.minimax.cn/matrix/api/v1/commerce/get_membership_info
+     Authorization: Bearer <mmoat_…>   Content-Type: application/json
+     body: {}                                   ← 不需要 workspace_id
+  -> 200 {"op_credit_summary":{"total_remaining_amount":"400",
+              "purchased_remaining_amount":"0","free_remaining_amount":"400"},
+          "base_resp":{"status_code":0,"status_msg":"success"}}
+
+GET  https://agent.minimax.cn/minimax-cloud/api/v1/credit/details?page_number=1&page_size=100
+  -> 200 {"base_resp":{"status_code":0,"status_msg":"ok"},
+          "details":[{"credit_type":2,"granted_amount":"400.00",
+                      "remaining_amount":"400.00","consumed_amount":"0.00",
+                      "granted_at_ms":…,"expire_at_ms":…}]}
+
+GET  https://agent.minimax.cn/minimax-cloud/api/v1/signin/status?timezone_id=Asia/Shanghai
+  -> 200 {"data":{"scene":2,"days":[{"day_no":1,"points":400,"status":3,"is_today":true,
+              "bonus_points":0}, …]}}
+```
+
+国际版同形，把 host 换成 `agent.minimax.io` 即可（实测两条都回 200）。
+
+实测踩到的三个坑：
+
+1. **`page_size` 太小会让台账接口回 `50001 internal error`**：`page_size=3` 失败、`20/100` 正常。
+   所以取台账固定用 `page_size=100`，并且**翻页参数是 `page_number`**（不是 `page`）。
+2. **余额要取 `op_credit_summary.total_remaining_amount`**：同一响应里的
+   `total_remains_credit` / `opcredit_balance` 在已迁移积分池的账号上恒为 `0`，取它们会显示"0 积分"。
+3. **`timezone_id` 是必需参数**，且必须是 IANA 名字（`Asia/Shanghai`）；缺失或传偏移量会回
+   `1406010011 invalid timezone_id`。
+
+到期规则：积分**按笔发放**，每批带自己的 `expire_at_ms`（实测有 30 天与 365 天两种制式），
+所以到期日一律读接口字段，不写死天数。
 
 ---
 
