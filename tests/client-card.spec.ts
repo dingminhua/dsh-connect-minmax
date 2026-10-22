@@ -223,6 +223,9 @@ describe('effectiveRoutesOf', () => {
     baseUrl: 'https://cn.example/api',
     login: { state: 'ready' as const, source: 'lease' as const },
     models: [],
+    catalog: [],
+    enabledRegions: ['cn', 'global'],
+    longContext: false,
     pluginVersion: '0.1.0',
     checkedAt: 0,
   }

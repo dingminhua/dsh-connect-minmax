@@ -128,6 +128,18 @@ export interface MiniMaxStatusView {
   /** 每个区域一条：国内 `minimax`、国际 `minimax-global`。 */
   routes: MiniMaxRouteView[]
   models: MiniMaxModelView[]
+  /**
+   * 完整目录（含未启用的模型）。
+   *
+   * `models` 只包含**注册出去**的那些；卡片做"勾选启用哪些模型"时必须看全目录，
+   * 否则用户想启用一个当前没启用的模型时，那个模型压根不在列表里。
+   * 旧版本插件不带这个字段 → 回退成 `models` 的副本。
+   */
+  catalog: MiniMaxModelView[]
+  /** 当前启用的区域；缺省（旧版本）按"注册了的就是启用的"推断。 */
+  enabledRegions: string[]
+  /** 1M 长上下文档。 */
+  longContext: boolean
   pluginVersion: string
   checkedAt: number
 }
@@ -183,29 +195,11 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
     ? raw['login'] as Record<string, unknown>
     : {}
 
-  const rawModels = Array.isArray(raw['models']) ? raw['models'] : []
-  const models: MiniMaxModelView[] = []
-  for (const entry of rawModels) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
-    const row = entry as Record<string, unknown>
-    const id = stringOf(row['id'])
-    if (id === undefined) continue
-    const contextWindow = finiteNumberOf(row['contextWindow']) ?? 0
-    const maxTokens = finiteNumberOf(row['maxTokens']) ?? 0
-    const badge = stringOf(row['badge'])
-    models.push({
-      id,
-      name: stringOf(row['name']) ?? id,
-      ...badge === undefined ? {} : { badge },
-      contextWindow,
-      maxTokens,
-      input: Array.isArray(row['input'])
-        ? row['input'].filter((item): item is string => typeof item === 'string')
-        : [],
-      reasoning: row['reasoning'] === true,
-      thinkingMode: row['thinkingMode'] === 'forced' ? 'forced' : 'switchable',
-    })
-  }
+  const models = parseModels(raw['models'])
+  // 旧版本不带 catalog：把 models 当全目录用，勾选框退化成"当前全部启用"。
+  const catalog = Array.isArray(raw['catalog']) && (raw['catalog'] as unknown[]).length > 0
+    ? parseModels(raw['catalog'])
+    : [...models]
 
   const pendingCode = stringOf(rawLogin['userCode'])
   const pendingUri = stringOf(rawLogin['verificationUri'])
@@ -232,9 +226,40 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
     },
     routes,
     models,
+    catalog,
+    enabledRegions: Array.isArray(raw['enabledRegions'])
+      ? raw['enabledRegions'].filter((item): item is string => item === 'cn' || item === 'global')
+      // 没这个字段时从已注册路由反推，至少卡片上的开关不会全灭。
+      : [...new Set(routes.map(route => route.region))],
+    longContext: raw['longContext'] === true,
     pluginVersion: stringOf(raw['pluginVersion']) ?? 'dev',
     checkedAt: finiteNumberOf(raw['checkedAt']) ?? 0,
   }
+}
+
+/** 收窄一份模型数组；坏行丢弃。 */
+function parseModels(value: unknown): MiniMaxModelView[] {
+  const models: MiniMaxModelView[] = []
+  for (const entry of Array.isArray(value) ? value : []) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const row = entry as Record<string, unknown>
+    const id = stringOf(row['id'])
+    if (id === undefined) continue
+    const badge = stringOf(row['badge'])
+    models.push({
+      id,
+      name: stringOf(row['name']) ?? id,
+      ...badge === undefined ? {} : { badge },
+      contextWindow: finiteNumberOf(row['contextWindow']) ?? 0,
+      maxTokens: finiteNumberOf(row['maxTokens']) ?? 0,
+      input: Array.isArray(row['input'])
+        ? row['input'].filter((item): item is string => typeof item === 'string')
+        : [],
+      reasoning: row['reasoning'] === true,
+      thinkingMode: row['thinkingMode'] === 'forced' ? 'forced' : 'switchable',
+    })
+  }
+  return models
 }
 
 /**

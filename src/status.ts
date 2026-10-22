@@ -122,6 +122,17 @@ export interface MiniMaxStatusPayload {
   /** 每个区域一条；顺序与注册顺序一致。 */
   routes: MiniMaxStatusRoute[]
   models: MiniMaxStatusModel[]
+  /**
+   * **完整目录**（含未启用的模型）。
+   *
+   * `models` 是"当前注册出去"的那份，卡片拿它没法做勾选——用户想启用一个当前
+   * 没启用的模型时，那个模型根本不在列表里。所以另给一份全目录，卡片自己比对。
+   */
+  catalog?: MiniMaxStatusModel[]
+  /** 当前注册了哪些区域；未列出的区域在卡片上是"关"。 */
+  enabledRegions?: string[]
+  /** 是否启用 1M 长上下文档。 */
+  longContext?: boolean
   pluginVersion: string
   /** 本次探测的时间戳（epoch ms）。 */
   checkedAt: number
@@ -197,6 +208,12 @@ export interface MiniMaxStatusDeps {
   /** 已注册的路由；至少一条。 */
   routes: readonly MiniMaxStatusRouteDeps[]
   models: readonly MiniMaxStatusModelSpec[]
+  /** 完整目录（含未启用项）；缺省时卡片只能把 `models` 当全目录用。 */
+  catalog?: readonly MiniMaxStatusModelSpec[]
+  /** 配置里启用的区域。 */
+  enabledRegions?: readonly string[]
+  /** 长上下文档位。 */
+  longContext?: boolean
   version: string
 }
 
@@ -455,6 +472,9 @@ export async function buildMiniMaxStatus(
     login: primary.login,
     routes,
     models: toStatusModels(deps.models),
+    ...deps.catalog === undefined ? {} : { catalog: toStatusModels(deps.catalog) },
+    ...deps.enabledRegions === undefined ? {} : { enabledRegions: [...deps.enabledRegions] },
+    ...deps.longContext === undefined ? {} : { longContext: deps.longContext },
     pluginVersion: deps.version,
     checkedAt: nowMs,
   }
@@ -509,6 +529,9 @@ export function registerMiniMaxStatusRoute(
           login: { state: 'error', source: 'none', detail: safeMessage(error) },
           routes: [],
           models: toStatusModels(deps.models),
+          ...deps.catalog === undefined ? {} : { catalog: toStatusModels(deps.catalog) },
+          ...deps.enabledRegions === undefined ? {} : { enabledRegions: [...deps.enabledRegions] },
+          ...deps.longContext === undefined ? {} : { longContext: deps.longContext },
           pluginVersion: deps.version,
           checkedAt: Date.now(),
         } satisfies MiniMaxStatusPayload)

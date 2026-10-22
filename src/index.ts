@@ -477,6 +477,11 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     registerMiniMaxStatusRoute(context, {
       routes: registeredRoutes,
       models,
+      // 全目录同样过一遍长上下文档位：卡片要展示的"上下文窗口"必须是用户
+      // 当前设置下的真实值，否则勾了 longContext 卡片还显示 512K。
+      catalog: MINIMAX_MODELS.map(spec => withContextWindow(spec, longContext)),
+      enabledRegions: requestedRegions,
+      longContext,
       version: PLUGIN_VERSION,
     })
     registerActions(context)
