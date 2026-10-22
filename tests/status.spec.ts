@@ -10,7 +10,7 @@
  *  3. **不泄露凭据。** 响应里只有登录态、区域、目录与版本号。
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildMiniMaxStatus,
@@ -19,6 +19,7 @@ import {
   MINIMAX_STATUS_PATH,
   MINIMAX_STATUS_TIMEOUT_MS,
   registerMiniMaxStatusRoute,
+  resetAccountCache,
   safeMessage,
   toStatusModels,
   type MiniMaxStatusAuth,
@@ -52,6 +53,8 @@ function routeStub(overrides: Partial<MiniMaxStatusRouteDeps> = {}): MiniMaxStat
     regionLabel: overrides.regionLabel ?? auth.regionLabel,
     baseUrl: overrides.baseUrl ?? auth.baseUrl,
     auth,
+    // 不透传的话，账户读取永远拿不到 token，积分相关的断言就会静默全绿在错误路径上。
+    ...overrides.accountToken === undefined ? {} : { accountToken: overrides.accountToken },
   }
 }
 
@@ -63,6 +66,84 @@ function depsStub(overrides: Partial<MiniMaxStatusDeps> = {}): MiniMaxStatusDeps
     ...overrides,
   }
 }
+
+describe('账户信息（积分 / 签到）', () => {
+  /** 让账户接口回一份可预测的响应。 */
+  function stubAccount(overrides: { balance?: unknown, lots?: unknown, signin?: unknown } = {}): void {
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+      const path = String(url)
+      const body = path.includes('get_membership_info')
+        ? overrides.balance ?? { op_credit_summary: { total_remaining_amount: '400', free_remaining_amount: '400', purchased_remaining_amount: '0' }, base_resp: { status_code: 0 } }
+        : path.includes('credit/details')
+          ? overrides.lots ?? { details: [{ credit_type: 2, granted_amount: '400.00', remaining_amount: '400.00', consumed_amount: '0.00', granted_at_ms: 1, expire_at_ms: Date.now() + 86_400_000 * 20 }], base_resp: { status_code: 0 } }
+          : overrides.signin ?? { data: { scene: 2, days: [{ day_no: 1, points: 400, status: 3, is_today: true, bonus_points: 0 }] }, base_resp: { status_code: 0 } }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+  }
+
+  it('登录态可用时投影出余额与签到进度', async () => {
+    resetAccountCache()
+    stubAccount()
+    const payload = await buildMiniMaxStatus(depsStub({
+      routes: [routeStub({ auth: authStub(), accountToken: async () => 'mmoat_x' })],
+    }), 1_700_000_000_000)
+    expect(payload.routes[0]?.credits?.balance?.totalRemaining).toBe(400)
+    expect(payload.routes[0]?.credits?.lotCount).toBe(1)
+    expect(payload.routes[0]?.signin?.days).toHaveLength(1)
+    expect(payload.routes[0]?.signin?.claimableToday).toBe(false)
+    vi.unstubAllGlobals()
+  })
+
+  it('60 秒内重复构建不再打上游（卡片 10s 轮询不能放大成 6 请求/10s）', async () => {
+    resetAccountCache()
+    stubAccount()
+    const deps = depsStub({ routes: [routeStub({ auth: authStub(), accountToken: async () => 'mmoat_x' })] })
+    await buildMiniMaxStatus(deps, 1_700_000_000_000)
+    const calls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length
+    await buildMiniMaxStatus(deps, 1_700_000_000_000 + 10_000)
+    expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.length).toBe(calls)
+    vi.unstubAllGlobals()
+  })
+
+  it('未登录时不打账户接口', async () => {
+    resetAccountCache()
+    stubAccount()
+    const payload = await buildMiniMaxStatus(depsStub({
+      routes: [routeStub({
+        auth: authStub({ inspect: async () => ({ state: 'missing', source: 'none' }) }),
+        accountToken: async () => 'mmoat_x',
+      })],
+    }))
+    expect(payload.routes[0]?.credits).toBeUndefined()
+    expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0)
+    vi.unstubAllGlobals()
+  })
+
+  it('账户接口全挂也不影响登录态与模型表', async () => {
+    resetAccountCache()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })))
+    const payload = await buildMiniMaxStatus(depsStub({
+      routes: [routeStub({ auth: authStub(), accountToken: async () => 'mmoat_x' })],
+    }))
+    expect(payload.ok).toBe(true)
+    expect(payload.login.state).toBe('ready')
+    expect(payload.models).toHaveLength(2)
+    expect(payload.routes[0]?.credits?.error).toBeDefined()
+    vi.unstubAllGlobals()
+  })
+
+  it('响应里不含 refresh token 材料', async () => {
+    resetAccountCache()
+    stubAccount()
+    const payload = await buildMiniMaxStatus(depsStub({
+      routes: [routeStub({ auth: authStub(), accountToken: async () => 'mmoat_x' })],
+    }))
+    const serialized = JSON.stringify(payload)
+    expect(serialized).not.toMatch(/refreshToken/i)
+    expect(serialized).not.toContain('mmoat_x')
+    vi.unstubAllGlobals()
+  })
+})
 
 describe('MINIMAX_STATUS_PATH', () => {
   it('固定为 /plugins/dsh-connect-minmax/status', () => {

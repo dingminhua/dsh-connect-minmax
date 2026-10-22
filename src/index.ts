@@ -310,6 +310,8 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       regionLabel: auth.regionLabel,
       baseUrl,
       auth: statusAuthOf(auth),
+      // 积分/签到走同一个 Bearer；只在登录态可用时才被调用（见 status.ts）。
+      accountToken: signal => source.token(signal),
     })
   }
 
@@ -355,6 +357,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
         baseUrl: source.baseUrl,
         auth: accountStatusAuthOf(source),
         accountId: account.id,
+        accountToken: signal => source.token(signal),
       })
       ctx.logger?.info(
         `dsh-connect-minmax: 已接管账号副本 "${account.label}"（${route}，区域 ${source.regionLabel}）`,

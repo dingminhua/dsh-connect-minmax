@@ -23,6 +23,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import {
+  buildCreditSnapshot,
+  fetchCreditBalance,
+  fetchCreditLots,
+  fetchSigninStatus,
+  type MiniMaxSigninDay,
+} from './credits.ts'
+
+import {
   MINIMAX_ROUTE as MINIMAX_STATUS_ROUTE,
   MINIMAX_STATUS_PATH,
 } from './status-paths.ts'
@@ -68,6 +76,24 @@ export interface MiniMaxStatusModel {
   thinkingMode: 'switchable' | 'forced'
 }
 
+/** 一条路由附带的账户信息（积分与签到）。 */
+export interface MiniMaxStatusCredits {
+  balance?: { totalRemaining: number, freeRemaining: number, purchasedRemaining: number }
+  lotCount?: number
+  expiringIn7d?: number
+  expiringIn30d?: number
+  earliestExpiryMs?: number
+  error?: string
+}
+
+/** 一条路由附带的签到进度。 */
+export interface MiniMaxStatusSignin {
+  ok: boolean
+  claimableToday: boolean
+  days: { dayNo: number, points: number, status: number, isToday: boolean }[]
+  error?: string
+}
+
 /** 一条路由（一个区域、或一个账号副本）的状态。 */
 export interface MiniMaxStatusRoute {
   route: string
@@ -77,6 +103,10 @@ export interface MiniMaxStatusRoute {
   login: MiniMaxStatusLogin
   /** 该路由来自账号副本时的副本 id；本机登录没有这个字段。 */
   accountId?: string
+  /** 账户接口读到的积分概览；读不到就没有这个字段。 */
+  credits?: MiniMaxStatusCredits
+  /** 七天一签的进度；读不到就没有这个字段。 */
+  signin?: MiniMaxStatusSignin
 }
 
 /** 状态路由的应答文档。 */
@@ -149,6 +179,13 @@ export interface MiniMaxStatusRouteDeps {
   route: string
   /** 该路由若来自"账号副本"，这里是副本 id；本机登录没有这个字段。 */
   accountId?: string
+  /**
+   * 取一个可用 token 去读账户接口（积分 / 签到）。
+   *
+   * 可选：不是每条路由都值得花一次网络往返（副本路由的 token 可能是快照）。
+   * 抛错或超时都只让 `credits` 缺席，不影响登录态与模型通路。
+   */
+  accountToken?: (signal?: AbortSignal) => Promise<string>
   region: MiniMaxStatusRegion
   regionLabel: string
   baseUrl: string
@@ -296,6 +333,84 @@ export async function inspectWithTimeout(
   }
 }
 
+/** 账户信息缓存有效期：卡片 10s 轮询，每条路由每 60s 才真打一次上游。 */
+export const ACCOUNT_CACHE_MS = 60_000
+
+/** 一次账户读取的结果。 */
+interface AccountRead {
+  atMs: number
+  credits?: MiniMaxStatusCredits
+  signin?: MiniMaxStatusSignin
+}
+
+/**
+ * 按路由缓存账户读取。
+ *
+ * 积分与签到是**附加信息**，代价却是每条路由三次上游请求；卡片每 10 秒轮询一次，
+ * 不缓存就是每 10 秒打上游 6 次。这里用"过期即重读、读失败也记时间戳"的策略：
+ * 失败同样占住缓存窗口，否则上游一挂每次轮询都重试，把故障放大成持续压力。
+ */
+const accountCache = new Map<string, AccountRead>()
+
+/** 清缓存（测试用）。 */
+export function resetAccountCache(): void {
+  accountCache.clear()
+}
+
+/**
+ * 读一条路由的积分与签到进度。
+ *
+ * 整段是 best-effort：token 取不到、上游报错、超时，都只让对应字段缺席，
+ * 绝不让状态文档失败——模型通路不依赖这些接口。
+ */
+async function readAccountInfo(
+  entry: MiniMaxStatusRouteDeps,
+  nowMs: number,
+): Promise<AccountRead | undefined> {
+  if (entry.accountToken === undefined) return undefined
+  const cached = accountCache.get(entry.route)
+  if (cached !== undefined && nowMs - cached.atMs < ACCOUNT_CACHE_MS) return cached
+
+  const token = await entry.accountToken().catch(() => undefined)
+  if (token === undefined) return undefined
+
+  const [balance, lots, signin] = await Promise.all([
+    fetchCreditBalance(entry.region, token).catch(() => ({ ok: false as const, error: '读取失败' })),
+    fetchCreditLots(entry.region, token).catch(() => ({ ok: false as const, error: '读取失败' })),
+    fetchSigninStatus(entry.region, token).catch(() => ({ ok: false as const, days: [], claimableToday: false, atMs: nowMs, error: '读取失败' })),
+  ])
+
+  const snapshot = buildCreditSnapshot(
+    balance.ok ? balance.balance : undefined,
+    lots.ok ? lots.lots : undefined,
+    nowMs,
+  )
+  const read: AccountRead = {
+    atMs: nowMs,
+    credits: {
+      ...snapshot.balance === undefined ? {} : { balance: snapshot.balance },
+      ...snapshot.lots === undefined ? {} : { lotCount: snapshot.lots.length },
+      ...snapshot.expiringIn7d === undefined ? {} : { expiringIn7d: snapshot.expiringIn7d },
+      ...snapshot.expiringIn30d === undefined ? {} : { expiringIn30d: snapshot.expiringIn30d },
+      ...snapshot.earliestExpiryMs === undefined ? {} : { earliestExpiryMs: snapshot.earliestExpiryMs },
+      ...snapshot.error === undefined ? {} : { error: snapshot.error },
+    },
+    signin: {
+      ok: signin.ok,
+      claimableToday: signin.ok && signin.claimableToday,
+      days: signin.days.map((day: MiniMaxSigninDay) => ({
+        dayNo: day.dayNo,
+        points: day.points,
+        status: day.status,
+        isToday: day.isToday,
+      })),
+      ...signin.error === undefined ? {} : { error: signin.error },
+    },
+  }
+  accountCache.set(entry.route, read)
+  return read
+}
+
 /**
  * 组装状态文档（不含 HTTP）。
  *
@@ -305,14 +420,21 @@ export async function buildMiniMaxStatus(
   deps: MiniMaxStatusDeps,
   nowMs: number = Date.now(),
 ): Promise<MiniMaxStatusPayload> {
-  const routes = await Promise.all(deps.routes.map(async entry => ({
-    route: entry.route,
-    region: entry.region,
-    regionLabel: entry.regionLabel,
-    baseUrl: entry.baseUrl,
-    login: await inspectWithTimeout(entry.auth),
-    ...entry.accountId === undefined ? {} : { accountId: entry.accountId },
-  })))
+  const routes = await Promise.all(deps.routes.map(async entry => {
+    const login = await inspectWithTimeout(entry.auth)
+    // 只有登录态可用时才去读账户接口：没登录时那三条必然一起失败。
+    const account = login.state === 'ready' ? await readAccountInfo(entry, nowMs) : undefined
+    return {
+      route: entry.route,
+      region: entry.region,
+      regionLabel: entry.regionLabel,
+      baseUrl: entry.baseUrl,
+      login,
+      ...entry.accountId === undefined ? {} : { accountId: entry.accountId },
+      ...account?.credits === undefined ? {} : { credits: account.credits },
+      ...account?.signin === undefined ? {} : { signin: account.signin },
+    }
+  }))
   const primary = routes[0] ?? {
     route: MINIMAX_STATUS_ROUTE,
     region: 'cn' as const,
