@@ -49,6 +49,8 @@ import {
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_ACCOUNT_TRANSFER_PATH,
   MINIMAX_CARD_KEYS,
+  MINIMAX_DEVICE_CANCEL_PATH,
+  MINIMAX_DEVICE_START_PATH,
   MINIMAX_MODEL_TEST_PATH,
   MINIMAX_SIGNIN_CLAIM_PATH,
   MINIMAX_STATUS_PATH,
@@ -56,6 +58,8 @@ import {
 } from '../status-paths.ts'
 import type {
   MiniMaxCreditsView,
+  MiniMaxDeviceSessionView,
+  MiniMaxRenewalView,
   MiniMaxLoginState,
   MiniMaxLoginView,
   MiniMaxModelView,
@@ -1050,11 +1054,15 @@ function AccountPanel(props: {
   onClaimAccounts(ids: readonly string[]): void
   onMoveAccount(id: string, direction: 'up' | 'down'): void
   onParticipate(ids: readonly string[]): void
+  onClaimAll(): void
+  onStartDevice(): void
+  onCancelDevice(id: string): void
   t: MiniMaxTranslate
 }): ReactElement {
   const {
     status, region, nowMs, busy, message,
-    onClaim, onDelete, onSelectAccount, onTestRoute, onClaimAccounts, onMoveAccount, onParticipate, t,
+    onClaim, onDelete, onSelectAccount, onTestRoute, onClaimAccounts, onMoveAccount, onParticipate,
+    onClaimAll, onStartDevice, onCancelDevice, t,
   } = props
   const routes = routesForRegion(effectiveRoutesOf(status), region)
   const live = routes.find(route => !isCopyRoute(route))
@@ -1088,6 +1096,21 @@ function AccountPanel(props: {
           onParticipate={ids => onParticipate(ids)}
         />
       )}
+
+      {/* 池空（还没有任何副本）时给一条出路：设备码登录自己拿一个账号。 */}
+      {(pool === undefined || pool.accounts.length === 0) && (
+        <DeviceLoginSection
+          sessions={live?.deviceSessions ?? []}
+          nowMs={nowMs}
+          busy={busy}
+          t={t}
+          onStart={onStartDevice}
+          onCancel={onCancelDevice}
+        />
+      )}
+
+      {/* 活凭据自续期状态：用户要确认的就是"关掉 MiniMax Code 它还能不能活"。 */}
+      {live?.renewal !== undefined && <RenewalRow renewal={live.renewal} t={t} />}
 
       {routes.map(route => (
         <div key={route.route} className="dsm-minimax-row">
@@ -1178,6 +1201,7 @@ function AccountPanel(props: {
                     ? t('signin.ready')
                     : t('signin.done')}
               </span>
+              <span className="dsm-minimax-signin-actions">
               <button
                 type="button"
                 className="dsm-minimax-btn dsm-minimax-btn-outline"
@@ -1187,12 +1211,114 @@ function AccountPanel(props: {
               >
                 {busy ? t('signin.claiming') : t('signin.claim')}
               </button>
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-outline"
+                disabled={busy}
+                title={t('signin.claimAllHint')}
+                onClick={() => { onClaimAll() }}
+              >
+                {t('signin.claimAll')}
+              </button>
+              </span>
             </div>
           </div>
         </div>
       )}
 
       {message !== undefined && <p className="dsm-minimax-hint">{message}</p>}
+    </div>
+  )
+}
+
+/**
+ * 设备码登录区：池空时的唯一出路（用户要"账号能自己登录"）。
+ *
+ * pending 会话画 user_code + 验证链接 + 取消；终态（authorized/denied/expired/
+ * failed）画一句结果，五分钟后由宿主清理。轮询在宿主自转，这里只读状态——
+ * 卡片自己不计时，刷新周期由 MINIMAX_POLL_INTERVAL_MS 决定。
+ */
+function DeviceLoginSection(props: {
+  sessions: MiniMaxDeviceSessionView[]
+  nowMs: number
+  busy: boolean
+  t: MiniMaxTranslate
+  onStart(): void
+  onCancel(id: string): void
+}): ReactElement {
+  const { sessions, nowMs, busy, t, onStart, onCancel } = props
+  const pending = sessions.find(session => session.state === 'pending')
+  const terminal = sessions.find(session => session.state !== 'pending')
+  return (
+    <div className="dsm-minimax-device">
+      <div className="dsm-minimax-fact-key">{t('device.add')}</div>
+      {pending !== undefined && (
+        <div className="dsm-minimax-hint">
+          <div>{t('device.pending')}</div>
+          {pending.userCode !== undefined && (
+            <div><strong>{t('device.code', { code: pending.userCode })}</strong></div>
+          )}
+          {pending.verificationUri !== undefined && (
+            <div>
+              <a href={pending.verificationUri} target="_blank" rel="noreferrer">{pending.verificationUri}</a>
+            </div>
+          )}
+          <div className="dsm-minimax-row-meta">
+            {t('device.expires', { seconds: String(Math.max(0, Math.round((pending.expiresAtMs - nowMs) / 1000))) })}
+          </div>
+          <button
+            type="button"
+            className="dsm-minimax-btn dsm-minimax-btn-ghost"
+            onClick={() => { onCancel(pending.id) }}
+          >
+            {t('device.cancel')}
+          </button>
+        </div>
+      )}
+      {pending === undefined && terminal !== undefined && (
+        <div className="dsm-minimax-hint">
+          {terminal.state === 'authorized' ? t('device.authorized')
+            : terminal.state === 'denied' ? t('device.denied')
+              : terminal.state === 'expired' ? t('device.expired')
+                : t('device.failed', { reason: terminal.reason ?? '' })}
+        </div>
+      )}
+      {pending === undefined && (
+        <button
+          type="button"
+          className="dsm-minimax-btn dsm-minimax-btn-outline"
+          disabled={busy}
+          onClick={onStart}
+        >
+          {busy ? t('device.starting') : t('device.add')}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** 活凭据自续期状态行：用户要确认"关掉 MiniMax Code 它还能不能活"。 */
+function RenewalRow(props: { renewal: MiniMaxRenewalView, t: MiniMaxTranslate }): ReactElement {
+  const { renewal, t } = props
+  const text = renewal.state === 'enabled' ? t('renewal.enabled')
+    : renewal.state === 'renewing' ? t('renewal.renewing')
+      : renewal.state === 'paused'
+        ? t('renewal.paused', { time: renewal.retryAtMs === undefined ? '—' : new Date(renewal.retryAtMs).toLocaleTimeString() })
+        : renewal.state === 'fatal' ? t('renewal.fatal', { reason: renewal.reason ?? '' })
+          : t('renewal.off')
+  const tone = renewal.state === 'fatal' ? 'off' : renewal.state === 'off' ? 'off' : 'on'
+  return (
+    <div className="dsm-minimax-row">
+      <div className="dsm-minimax-row-main">
+        <div className="dsm-minimax-model-id">{t('renewal.label')}</div>
+        <div className="dsm-minimax-model-name">{text}</div>
+      </div>
+      <div className="dsm-minimax-row-side">
+        <span className={`dsm-minimax-badge dsm-minimax-badge-${tone}`}>
+          <span className="dsm-minimax-badge-dot" />
+          {renewal.state === 'fatal' || renewal.state === 'off' ? t('renewal.badgeOff') : t('renewal.badgeOn')}
+        </span>
+      </div>
     </div>
   )
 }
@@ -1851,6 +1977,43 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     setBusy(false)
   }, [region, load])
 
+  /**
+   * 一键签到**所有**账号：本机登录（id='live'）+ 池里每个副本。
+   * 后端逐个问 status 再领、串行执行，撞设备级"已签"会停；这里只收集 id。
+   */
+  const handleClaimAll = useCallback(async (): Promise<void> => {
+    if (status === undefined) return
+    const routes = routesForRegion(effectiveRoutesOf(status), region)
+    const pool = routes.find(route => !isCopyRoute(route))?.pool
+    const ids = ['live', ...(pool?.accounts ?? []).map(entry => entry.id)]
+    setBusy(true)
+    const outcome = await postActionJson(MINIMAX_SIGNIN_CLAIM_PATH, { region, accountIds: ids })
+    const rawResults = outcome.body['results']
+    const results = Array.isArray(rawResults)
+      ? rawResults.filter((entry): entry is { claimed?: boolean } => typeof entry === 'object' && entry !== null)
+      : []
+    const claimed = results.filter(entry => entry.claimed === true).length
+    setActionMessage(results.length === 0
+      ? outcome.message
+      : translate('signin.claimedSummary', { claimed: String(claimed), total: String(results.length) }))
+    await load()
+    setBusy(false)
+  }, [status, region, load, translate])
+
+  /** 发起设备码登录：宿主返回 user_code + 验证链接，轮询在宿主自转。 */
+  const handleStartDevice = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    const outcome = await postActionJson(MINIMAX_DEVICE_START_PATH, { region })
+    if (!outcome.ok) setActionMessage(outcome.message)
+    await load()
+    setBusy(false)
+  }, [region, load])
+
+  const handleCancelDevice = useCallback(async (id: string): Promise<void> => {
+    await postAction(MINIMAX_DEVICE_CANCEL_PATH, { id })
+    await load()
+  }, [load])
+
   /** 写入"不参与换号/批量动作"的账号列表（复选框是持久化开关）。 */
   const handleParticipate = useCallback(async (ids: readonly string[]): Promise<void> => {
     if (settingsScope === undefined) return
@@ -1969,6 +2132,9 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                 onClaimAccounts={ids => { void handleClaimAccounts(ids) }}
                 onMoveAccount={(id, dir) => { void handleMoveAccount(id, dir) }}
                 onParticipate={ids => { void handleParticipate(ids) }}
+                onClaimAll={() => { void handleClaimAll() }}
+                onStartDevice={() => { void handleStartDevice() }}
+                onCancelDevice={id => { void handleCancelDevice(id) }}
                 t={translate}
               />
             )

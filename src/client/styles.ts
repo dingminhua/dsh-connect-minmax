@@ -241,6 +241,9 @@ export const MINIMAX_CARD_CSS = `
 .dsm-minimax-day-claimable{border-color:rgba(210,153,34,.5);color:#d29922;background:rgba(210,153,34,.1)}
 .dsm-minimax-day-today{font-weight:700}
 .dsm-minimax-signin-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.dsm-minimax-signin-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-minimax-device{display:flex;flex-direction:column;gap:6px;padding:8px 0}
+.dsm-minimax-device a{word-break:break-all}
 
 /* ---- 幽灵按钮（删除这类次要动作） ---- */
 .dsm-minimax-btn-ghost{

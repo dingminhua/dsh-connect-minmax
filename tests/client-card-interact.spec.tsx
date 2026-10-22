@@ -18,6 +18,8 @@ import { MiniMaxCard } from '../src/client/MiniMaxCard.tsx'
 import type { MiniMaxTranslate } from '../src/client/MiniMaxCard.tsx'
 import {
   MINIMAX_ACCOUNT_REMOVE_PATH,
+  MINIMAX_DEVICE_CANCEL_PATH,
+  MINIMAX_DEVICE_START_PATH,
   MINIMAX_ACCOUNT_REFRESH_PATH,
   MINIMAX_ACCOUNT_SELECT_PATH,
   MINIMAX_SETTINGS_SAVE_PATH,
@@ -30,8 +32,10 @@ const t: MiniMaxTranslate = (key, params) => {
   const code = params?.['code']
   const label = params?.['label']
   const amount = params?.['amount']
+  const reason = params?.['reason']
   if (code !== undefined) return `${key}:${String(code)}`
   if (amount !== undefined) return `${key}:${String(amount)}`
+  if (reason !== undefined) return `${key}:${String(reason)}`
   return label === undefined ? key : `${key}:${String(label)}`
 }
 
@@ -409,6 +413,97 @@ describe('账号页动作', () => {
     expect(html).toContain('credits.balance')
     expect(html).toContain('400')
     expect(html).toContain('credits.lots')
+  })
+})
+
+describe('设备码登录与自续期（池空时的出路）', () => {
+  it('池空 → 画「添加账号」；点击 POST device/start', async () => {
+    // 默认 payload 的 liveRoute 没有 pool 字段 = 池空。
+    mockRoutes({ status: () => statusPayload() })
+    await mount(recordingScope(() => statusPayload()))
+    const add = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'device.add')
+    expect(add).toBeDefined()
+    await act(async () => { add?.click() })
+    await settle()
+    const call = posted.find(entry => entry.path === MINIMAX_DEVICE_START_PATH)
+    expect(call?.body).toEqual({ region: 'cn' })
+  })
+
+  it('pending 会话 → 显示 user_code 与验证链接；取消 POST device/cancel', async () => {
+    const payload = statusPayload({
+      routes: [liveRoute({
+        deviceSessions: [{
+          id: 'sess-1',
+          region: 'cn',
+          state: 'pending',
+          userCode: 'ABCD-1234',
+          verificationUri: 'https://account.minimax.cn/oauth-authorize',
+          expiresAtMs: Date.now() + 240_000,
+        }],
+      })],
+    })
+    mockRoutes({ status: () => payload })
+    await mount(recordingScope(() => payload))
+    const html = container.innerHTML
+    expect(html).toContain('device.code:ABCD-1234')
+    expect(html).toContain('https://account.minimax.cn/oauth-authorize')
+    const cancel = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'device.cancel')
+    expect(cancel).toBeDefined()
+    await act(async () => { cancel?.click() })
+    await settle()
+    const call = posted.find(entry => entry.path === MINIMAX_DEVICE_CANCEL_PATH)
+    expect(call?.body).toEqual({ id: 'sess-1' })
+  })
+
+  it('池里有副本时不画「添加账号」区（池非空不是绝境）', async () => {
+    const payload = statusPayload({
+      routes: [liveRoute({ pool: { active: 'cn-c1', accounts: [{ id: 'cn-c1', label: '副本 1', live: false, drained: false, rank: 1, participates: true }] } })],
+    })
+    mockRoutes({ status: () => payload })
+    await mount(recordingScope(() => payload))
+    expect(Array.from(container.querySelectorAll('button')).some(b => b.textContent === 'device.add')).toBe(false)
+  })
+
+  it('续期 fatal → 把死因画出来（用户要能看到为什么停了）', async () => {
+    const payload = statusPayload({
+      routes: [liveRoute({ renewal: { state: 'fatal', reason: 'grant refused: HTTP 400 invalid_grant' } })],
+    })
+    mockRoutes({ status: () => payload })
+    await mount(recordingScope(() => payload))
+    const html = container.innerHTML
+    expect(html).toContain('renewal.fatal')
+    expect(html).toContain('invalid_grant')
+  })
+
+  it('续期 enabled → 显示「不用开着 MiniMax Code」的承诺', async () => {
+    const payload = statusPayload({
+      routes: [liveRoute({ renewal: { state: 'enabled', expiresAtMs: Date.now() + 3_600_000 } })],
+    })
+    mockRoutes({ status: () => payload })
+    await mount(recordingScope(() => payload))
+    expect(container.innerHTML).toContain('renewal.enabled')
+  })
+})
+
+describe('一键签到所有账号', () => {
+  it('POST 带 live + 池里每个副本的 id，逐个串行领', async () => {
+    const payload = statusPayload({
+      routes: [liveRoute({ pool: { active: 'cn-c1', accounts: [
+        { id: 'cn-c1', label: '副本 1', live: false, drained: false, rank: 1, participates: true },
+        { id: 'cn-c2', label: '副本 2', live: false, drained: false, rank: 2, participates: true },
+      ] } })],
+    })
+    mockRoutes({
+      status: () => payload,
+      claimResult: { ok: true, claimed: true, message: '已领取。' },
+    })
+    await mount(recordingScope(() => payload))
+    const claimAll = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'signin.claimAll')
+    expect(claimAll).toBeDefined()
+    await act(async () => { claimAll?.click() })
+    await settle()
+    const call = posted.find(entry => entry.path === MINIMAX_SIGNIN_CLAIM_PATH)
+    expect(call?.body).toEqual({ region: 'cn', accountIds: ['live', 'cn-c1', 'cn-c2'] })
   })
 })
 
