@@ -85,6 +85,24 @@ export interface MiniMaxModelView {
   thinkingMode: 'switchable' | 'forced'
 }
 
+/** 一条路由的积分概览（账户接口读来的，读不到就整段缺席）。 */
+export interface MiniMaxCreditsView {
+  balance?: { totalRemaining: number, freeRemaining: number, purchasedRemaining: number }
+  lotCount?: number
+  expiringIn7d?: number
+  expiringIn30d?: number
+  earliestExpiryMs?: number
+  error?: string
+}
+
+/** 一条路由的签到进度。 */
+export interface MiniMaxSigninView {
+  ok: boolean
+  claimableToday: boolean
+  days: { dayNo: number, points: number, status: number, isToday: boolean }[]
+  error?: string
+}
+
 /** 一条供应商路由（一个区域）的状态。 */
 export interface MiniMaxRouteView {
   route: string
@@ -94,6 +112,8 @@ export interface MiniMaxRouteView {
   login: MiniMaxLoginView
   /** 来自账号副本时的副本 id（`cn-cfd703e1` 这种）；本机登录没有。 */
   accountId?: string
+  credits?: MiniMaxCreditsView
+  signin?: MiniMaxSigninView
 }
 
 /** 状态路由的应答文档。 */
@@ -239,9 +259,13 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     const expiresAtMs = finiteNumberOf(loginRaw['expiresAtMs'])
     const detail = stringOf(loginRaw['detail'])
     const accountId = stringOf(row['accountId'])
+    const credits = parseCredits(row['credits'])
+    const signin = parseSignin(row['signin'])
     routes.push({
       route,
       ...accountId === undefined ? {} : { accountId },
+      ...credits === undefined ? {} : { credits },
+      ...signin === undefined ? {} : { signin },
       region: row['region'] === 'global' ? 'global' : 'cn',
       regionLabel: stringOf(row['regionLabel']) ?? (row['region'] === 'global' ? '国际版' : '国内版'),
       baseUrl: stringOf(row['baseUrl']) ?? '',
@@ -257,6 +281,59 @@ function parseRoutes(value: unknown): MiniMaxRouteView[] {
     })
   }
   return routes
+}
+
+/** 解析积分概览：任何形状不符就整段丢弃（宁可不显示，也不显示半个数字）。 */
+function parseCredits(value: unknown): MiniMaxCreditsView | undefined {
+  const row = (typeof value === 'object' && value !== null && !Array.isArray(value))
+    ? value as Record<string, unknown>
+    : undefined
+  if (row === undefined) return undefined
+  const balanceRaw = (typeof row['balance'] === 'object' && row['balance'] !== null && !Array.isArray(row['balance']))
+    ? row['balance'] as Record<string, unknown>
+    : undefined
+  const error = stringOf(row['error'])
+  if (balanceRaw === undefined && error === undefined) return undefined
+  return {
+    ...balanceRaw === undefined ? {} : {
+      balance: {
+        totalRemaining: finiteNumberOf(balanceRaw['totalRemaining']) ?? 0,
+        freeRemaining: finiteNumberOf(balanceRaw['freeRemaining']) ?? 0,
+        purchasedRemaining: finiteNumberOf(balanceRaw['purchasedRemaining']) ?? 0,
+      },
+    },
+    ...finiteNumberOf(row['lotCount']) === undefined ? {} : { lotCount: finiteNumberOf(row['lotCount'])! },
+    ...finiteNumberOf(row['expiringIn7d']) === undefined ? {} : { expiringIn7d: finiteNumberOf(row['expiringIn7d'])! },
+    ...finiteNumberOf(row['expiringIn30d']) === undefined ? {} : { expiringIn30d: finiteNumberOf(row['expiringIn30d'])! },
+    ...finiteNumberOf(row['earliestExpiryMs']) === undefined ? {} : { earliestExpiryMs: finiteNumberOf(row['earliestExpiryMs'])! },
+    ...error === undefined ? {} : { error },
+  }
+}
+
+/** 解析签到进度；缺 `days` 数组时回一份空进度。 */
+function parseSignin(value: unknown): MiniMaxSigninView | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  const rawDays = Array.isArray(row['days']) ? row['days'] : undefined
+  if (rawDays === undefined) return undefined
+  const days: MiniMaxSigninView['days'] = []
+  for (const entry of rawDays) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const day = entry as Record<string, unknown>
+    days.push({
+      dayNo: finiteNumberOf(day['dayNo']) ?? 0,
+      points: finiteNumberOf(day['points']) ?? 0,
+      status: finiteNumberOf(day['status']) ?? 0,
+      isToday: day['isToday'] === true,
+    })
+  }
+  const error = stringOf(row['error'])
+  return {
+    ok: row['ok'] === true,
+    claimableToday: row['claimableToday'] === true,
+    days,
+    ...error === undefined ? {} : { error },
+  }
 }
 
 /**

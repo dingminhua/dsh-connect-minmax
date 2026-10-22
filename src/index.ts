@@ -48,6 +48,8 @@ import {
   writeAccounts,
 } from './accounts.ts'
 import { MiniMaxAccountSource } from './account-source.ts'
+import { registerMiniMaxActionRoutes } from './actions.ts'
+import type { MiniMaxActionContext, MiniMaxModelTestResult } from './actions.ts'
 import { PLUGIN_VERSION } from './version.ts'
 
 /** 插件名：同时是 Loader 条目 id 与设置命名空间。 */
@@ -275,6 +277,8 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   /** 本机登录（每个区域一条），也是镜像"当前账号"的来源。 */
   const liveAuths = new Map<MiniMaxRegion, MiniMaxAuth>()
+  /** 每条路由的适配器；`/model/test` 要用它打真实通路，而不是另造一条请求。 */
+  const adaptersByRoute = new Map<string, MiniMaxAdapter>()
 
   for (const region of requestedRegions) {
     const route = routeForRegion(region)
@@ -401,15 +405,68 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
     return
   }
 
+  /**
+   * 卡片动作接口：代领签到、删除副本、测试模型。
+   *
+   * 与状态路由一样挂在 `webServer` 上（可选服务，apply 期不能采样）。
+   */
+  const registerActions = (webCtx: MiniMaxActionContext): void => {
+    registerMiniMaxActionRoutes(webCtx, {
+      tokenForRegion: async (region, signal) => {
+        const auth = liveAuths.get(region)
+        if (auth === undefined) throw new Error(`本机没有注册${region === 'global' ? '国际版' : '国内版'}的登录路由。`)
+        return auth.token(signal)
+      },
+      testModel: async (route, model, signal): Promise<MiniMaxModelTestResult> => {
+        const adapter = adaptersByRoute.get(route)
+        if (adapter === undefined) return { ok: false, latencyMs: 0, error: `未知路由 "${route}"。` }
+        const started = Date.now()
+        try {
+          // 走 prepareCall → stream 这条**真实**通路：鉴权头、baseUrl、思考档位都与
+          // 对话一致。在这里另造一条裸 fetch 就等于测了个假链路，测过不代表能用。
+          const call = await adapter.prepareCall(route, model, signal)
+          let text = ''
+          let failure: string | undefined
+          for await (const chunk of call.stream({
+            provider: route,
+            model,
+            messages: [{ role: 'user', content: [{ type: 'text', text: '只回复两个字：你好' }] }],
+            maxTokens: 64,
+            ...signal === undefined ? {} : { signal },
+          })) {
+            const event = chunk as { type?: string, text?: string, reason?: string, error?: unknown }
+            if (event.type === 'text-delta') text += event.text ?? ''
+            if (event.type === 'error') failure = String(event.error ?? '上游返回错误')
+            if (event.type === 'finish' && event.reason !== undefined && event.reason !== 'end') {
+              failure ??= `finish=${event.reason}`
+            }
+            if (text.length > 24) break
+          }
+          if (failure !== undefined) return { ok: false, latencyMs: Date.now() - started, error: failure }
+          return {
+            ok: true,
+            latencyMs: Date.now() - started,
+            ...text === '' ? {} : { sample: text.slice(0, 24) },
+          }
+        } catch (error: unknown) {
+          return { ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
+        }
+      },
+      log: message => ctx.logger?.info(`dsh-connect-minmax: ${message}`),
+    })
+  }
+
   // 状态卡片是可选能力：等 webServer 出现再挂，不能 apply 期采样。
   ctx.inject(['webServer'], webCtx => {
     // status.ts 只声明它真正用到的 webServer 面（便于测试替身），注入回调给的
     // 是完整 Context；`webServer` 由这次注入保证存在，所以这里做一次收窄。
-    registerMiniMaxStatusRoute(webCtx as unknown as MiniMaxStatusContext, {
+    const context = webCtx as unknown as MiniMaxStatusContext & MiniMaxActionContext
+    registerMiniMaxStatusRoute(context, {
       routes: registeredRoutes,
       models,
       version: PLUGIN_VERSION,
     })
+    registerActions(context)
   })
 }
 

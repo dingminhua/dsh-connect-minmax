@@ -457,7 +457,8 @@ export async function buildMiniMaxStatus(
 }
 
 /** 回一份 JSON。 */
-function json(res: ServerResponse, status: number, body: unknown): void {
+/** 回一份 JSON（动作路由共用）。 */
+export function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
