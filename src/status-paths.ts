@@ -14,6 +14,16 @@
 /** 状态路由的路径。前缀 = Loader 条目 id（`cordis.patch.yml` 的 `id:`）。 */
 export const MINIMAX_STATUS_PATH = '/plugins/dsh-connect-minmax/status'
 
+/**
+ * 卡片动作接口。
+ *
+ * 与宿主侧 `actions.ts` 的三个常量**必须逐字一致**——这里不 import 那边，是因为
+ * 浏览器半边不该把宿主模块（含 node:http）拉进 bundle。有单测钉住两侧相等。
+ */
+export const MINIMAX_SIGNIN_CLAIM_PATH = '/plugins/dsh-connect-minmax/signin/claim'
+export const MINIMAX_ACCOUNT_REMOVE_PATH = '/plugins/dsh-connect-minmax/account/remove'
+export const MINIMAX_MODEL_TEST_PATH = '/plugins/dsh-connect-minmax/model/test'
+
 /** 本插件注册的 LLM 路由名。 */
 export const MINIMAX_ROUTE = 'minimax'
 
@@ -87,6 +97,8 @@ export interface MiniMaxModelView {
 
 /** 一条路由的积分概览（账户接口读来的，读不到就整段缺席）。 */
 export interface MiniMaxCreditsView {
+  /** 这份积分数据实际读取时间；缓存最多 60s 旧，所以它不等于 `checkedAt`。 */
+  atMs?: number
   balance?: { totalRemaining: number, freeRemaining: number, purchasedRemaining: number }
   lotCount?: number
   expiringIn7d?: number
@@ -319,7 +331,9 @@ function parseCredits(value: unknown): MiniMaxCreditsView | undefined {
     : undefined
   const error = stringOf(row['error'])
   if (balanceRaw === undefined && error === undefined) return undefined
+  const atMs = finiteNumberOf(row['atMs'])
   return {
+    ...atMs === undefined ? {} : { atMs },
     ...balanceRaw === undefined ? {} : {
       balance: {
         totalRemaining: finiteNumberOf(balanceRaw['totalRemaining']) ?? 0,

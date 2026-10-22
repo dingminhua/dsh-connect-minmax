@@ -120,28 +120,66 @@ async function mount(): Promise<void> {
 }
 
 /**
- * 「路由」表。
+ * 新卡片的 DOM 定位工具。
  *
- * 按**表头**识别而不是按 DOM 顺序：卡片里有两张 class 完全相同的表（路由表
- * 与模型表），靠下标取会在有人调换区块顺序时静默测到另一张表。
+ * 一律**按文本内容**定位，不按 class 下标：卡片里有好几组结构相同的行
+ * （账号行、模型行），靠下标取会在有人调整区块顺序时静默测到另一组。
  */
-function routesTable(): HTMLTableElement | undefined {
-  return Array.from(container.querySelectorAll('table'))
-    .find(table => (table.querySelector('th')?.textContent ?? '').includes('routes.provider'))
+
+/** 某个区域的 tab（含区域名与开关）。 */
+function regionTab(region: 'cn' | 'global'): HTMLElement | undefined {
+  return Array.from(container.querySelectorAll<HTMLElement>('.dsm-minimax-tab'))
+    .find(tab => tab.textContent?.includes(`region.${region}`))
 }
 
-/** 路由表里一行的单元格文本（0=供应商 1=区域 2=登录态 3=到期）。 */
-function rowCellsOf(route: string): string[] {
-  const rows = Array.from(routesTable()?.querySelectorAll('tbody tr') ?? [])
-  const row = rows.find(candidate => (candidate.querySelector('td')?.textContent ?? '').includes(route))
-  expect(row, `路由表里应当有一行 ${route}`).toBeDefined()
-  return Array.from(row?.querySelectorAll('td') ?? []).map(cell => cell.textContent ?? '')
+/** 切到某个区域。 */
+async function clickRegion(region: 'cn' | 'global'): Promise<void> {
+  const button = regionTab(region)?.querySelector('button')
+  expect(button, `区域 tab ${region}`).toBeDefined()
+  await act(async () => {
+    (button as HTMLElement).click()
+  })
 }
 
-/** 「路由」表下方那句副本说明（小字 hint）。 */
+/** 切到某个子页（`t` 把键原样返回，所以文本就是 `panel.models`）。 */
+async function clickPanel(panel: 'account' | 'models' | 'diagnostics'): Promise<void> {
+  const button = Array.from(container.querySelectorAll('.dsm-minimax-subtab'))
+    .find(tab => tab.textContent?.includes(`panel.${panel}`))
+  expect(button, `子页 ${panel}`).toBeDefined()
+  await act(async () => {
+    (button as HTMLElement).click()
+  })
+}
+
+/** 某个路由/模型的整行。 */
+function cardRowOf(name: string): HTMLElement | undefined {
+  return Array.from(container.querySelectorAll<HTMLElement>('.dsm-minimax-row'))
+    .find(row => row.querySelector('.dsm-minimax-model-id')?.textContent?.includes(name))
+}
+
+/** 行左侧主体（供应商名、副本角标、建议语）。 */
+function rowMain(name: string): string {
+  const row = cardRowOf(name)
+  expect(row, `应当有一行 ${name}`).toBeDefined()
+  return row?.querySelector('.dsm-minimax-row-main')?.textContent ?? ''
+}
+
+/** 行右侧（登录态徽标、到期、凭据来源、按钮）。 */
+function rowSide(name: string): string {
+  const row = cardRowOf(name)
+  expect(row, `应当有一行 ${name}`).toBeDefined()
+  return row?.querySelector('.dsm-minimax-row-side')?.textContent ?? ''
+}
+
+/** 账号页里某个路由的行；不存在时返回 undefined（供"不该出现"的断言用）。 */
+function accountRowOf(name: string): HTMLElement | undefined {
+  return cardRowOf(name)
+}
+
+/** 账号页底部那句副本说明（只在真有副本时出现）。 */
 function copyHintText(): string {
-  const hint = routesTable()?.parentElement?.querySelector('p.dsm-minimax-hint')
-  return hint?.textContent ?? ''
+  const hints = Array.from(container.querySelectorAll('.dsm-minimax-panel > .dsm-minimax-hint'))
+  return hints.map(hint => hint.textContent ?? '').find(text => text.includes('routes.copyHint')) ?? ''
 }
 
 /** 让 fetch 回一份指定文档。 */
@@ -154,14 +192,18 @@ function mockFetch(body: unknown, ok = true, status = 200): void {
 }
 
 describe('MiniMaxCard 渲染', () => {
-  it('读到状态后渲染出模型表与登录态', async () => {
+  it('读到状态后渲染出登录态；模型页切过去才有模型', async () => {
     mockFetch(payload())
     await mount()
     const html = container.innerHTML
-    expect(html).toContain('MiniMax-M3')
-    expect(html).toContain('MiniMax-M2.7')
     expect(html).toContain('login.ready')
     expect(html).toContain('promise.noApiKey')
+    // 账号页不该顺手把模型清单也画出来（那是另一个子页的职责）。
+    expect(html).not.toContain('MiniMax-M3')
+    await clickPanel('models')
+    const models = container.innerHTML
+    expect(models).toContain('MiniMax-M3')
+    expect(models).toContain('MiniMax-M2.7')
   })
 
   it('未登录时给出"去 MiniMax Code 登录"的建议', async () => {
@@ -223,21 +265,20 @@ describe('MiniMaxCard 渲染', () => {
 })
 
 describe('MiniMaxCard 多路由渲染', () => {
-  it('每条路由渲染一行：路由名、供应商、区域、登录态、到期', async () => {
+  it('两个区域各自成 tab；切过去才渲染那一侧的行', async () => {
     mockFetch(payload())
     await mount()
-    const html = container.innerHTML
-    expect(html).toContain('routes.label')
-    expect(html).toContain('minimax-global')
-    expect(html).toContain('provider.minimax')
-    expect(html).toContain('provider.minimaxGlobal')
-    expect(html).toContain('region.cn')
-    expect(html).toContain('region.global')
-    expect(html).toContain('routes.state')
-    expect(html).toContain('routes.expires')
-    // 国内就绪、国际未就绪：两行的登录态徽标不同。
-    expect(html).toContain('login.ready')
-    expect(html).toContain('login.missing')
+    // 两个 tab 都在（即使某侧未登录），区域名与就绪状态一眼可辨。
+    expect(regionTab('cn')?.textContent ?? '').toContain('region.cn')
+    expect(regionTab('global')?.textContent ?? '').toContain('region.global')
+    expect(rowMain('minimax')).toContain('provider.minimax')
+    expect(rowSide('minimax')).toContain('login.ready')
+    expect(rowSide('minimax')).toContain('routes.expires')
+    // 默认只看国内版：国际版那一行不该混进来。
+    expect(accountRowOf('minimax-global')).toBeUndefined()
+    await clickRegion('global')
+    expect(rowMain('minimax-global')).toContain('provider.minimaxGlobal')
+    expect(rowSide('minimax-global')).toContain('login.missing')
   })
 
   it('汇总徽标：任一路由就绪就是绿色（routes.anyReady）', async () => {
@@ -321,6 +362,8 @@ describe('MiniMaxCard 多路由渲染', () => {
       ],
     }))
     await mount()
+    // 这条 authorizing 路由是国际版的，默认页看不到——先切区域。
+    await clickRegion('global')
     const html = container.innerHTML
     expect(html).toContain('login.authorizing')
     expect(html).toContain('advice.authorizingCode')
@@ -335,12 +378,13 @@ describe('MiniMaxCard 多路由渲染', () => {
     const html = container.innerHTML
     expect(html).toContain('dsm-minimax-card')
     // 合成出来的那一条路由：国内版 / minimax。
-    expect(html).toContain('routes.label')
     expect(html).toContain('provider.minimax')
     expect(html).toContain('region.cn')
     expect(html).toContain('login.ready')
-    // 国际版那一行**不该**出现。
-    expect(html).not.toContain('minimax-global')
+    // 国际版没有可合成的路由：tab 还在，但那一侧没有任何行。
+    await clickRegion('global')
+    expect(accountRowOf('minimax-global')).toBeUndefined()
+    expect(container.innerHTML).toContain('account.noneRegistered')
   })
 
   it('routes 为空且未登录时，仍给出建议而不是白屏', async () => {
@@ -350,6 +394,8 @@ describe('MiniMaxCard 多路由渲染', () => {
     expect(html).toContain('dsm-minimax-card')
     expect(html).toContain('login.anonymous')
     expect(html).toContain('advice.cn.signInRequired')
+    // 旧应答下积分/签到读不到，页面仍要完整画出来而不是崩。
+    expect(html).toContain('credits.unavailable')
   })
 })
 
@@ -387,29 +433,23 @@ describe('MiniMaxCard 账号副本渲染', () => {
       ],
     }))
     await mount()
-    // 供应商列：MiniMax 副本 · cfd703e1（t 把 label 拼在键后面）。
-    const copyCells = rowCellsOf('minimax-cn-cfd703e1')
-    expect(copyCells[0] ?? '').toContain('provider.minimaxCopy:cfd703e1')
-    // 区域列：区域名 + 角标，两者都在**同一格**里（追加在区域后面，不是新列）。
-    expect(copyCells[1] ?? '').toContain('region.cn')
-    expect(copyCells[1] ?? '').toContain('routes.copy')
-    // 本机登录的两行不受影响：供应商名沿用旧的，区域列里没有角标。
-    const localCells = rowCellsOf('minimax')
-    expect(localCells[0] ?? '').toContain('provider.minimax')
-    expect(localCells[0] ?? '').not.toContain('provider.minimaxCopy')
-    expect(localCells[1] ?? '').not.toContain('routes.copy')
-    const globalCells = rowCellsOf('minimax-global')
-    expect(globalCells[0] ?? '').toContain('provider.minimaxGlobal')
-    expect(globalCells[1] ?? '').not.toContain('routes.copy')
+    // 副本行：供应商名带短 id（t 把 label 拼在键后面），并挂「副本」角标。
+    const copyMain = rowMain('minimax-cn-cfd703e1')
+    expect(copyMain).toContain('provider.minimaxCopy:cfd703e1')
+    expect(copyMain).toContain('routes.copy')
+    // 本机登录那行不受影响：沿用普通供应商名，也没有副本角标。
+    const localMain = rowMain('minimax')
+    expect(localMain).toContain('provider.minimax')
+    expect(localMain).not.toContain('provider.minimaxCopy')
+    expect(localMain).not.toContain('routes.copy')
   })
 
   it('本机登录行没有「副本」角标，也没有副本供应商名', async () => {
     mockFetch(payload())
     await mount()
-    for (const route of ['minimax', 'minimax-global']) {
-      const cells = rowCellsOf(route)
-      expect(cells[1] ?? '', route).not.toContain('routes.copy')
-    }
+    expect(rowMain('minimax')).not.toContain('routes.copy')
+    await clickRegion('global')
+    expect(rowMain('minimax-global')).not.toContain('routes.copy')
     const html = container.innerHTML
     expect(html).not.toContain('provider.minimaxCopy')
     expect(html).not.toContain('provider.minimaxGlobalCopy')
@@ -439,6 +479,7 @@ describe('MiniMaxCard 账号副本渲染', () => {
       })],
     }))
     await mount()
+    await clickRegion('global')
     const html = container.innerHTML
     expect(html).toContain('provider.minimaxGlobalCopy:058de9a6')
     expect(html).not.toContain('provider.minimaxCopy:')

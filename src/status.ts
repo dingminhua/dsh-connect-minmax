@@ -78,6 +78,8 @@ export interface MiniMaxStatusModel {
 
 /** 一条路由附带的账户信息（积分与签到）。 */
 export interface MiniMaxStatusCredits {
+  /** 这份数据实际是什么时候读的（缓存最多 60s 旧，卡片要显示真实读取时间）。 */
+  atMs?: number
   balance?: { totalRemaining: number, freeRemaining: number, purchasedRemaining: number }
   lotCount?: number
   expiringIn7d?: number
@@ -409,6 +411,7 @@ async function readAccountInfo(
   const read: AccountRead = {
     atMs: nowMs,
     credits: {
+      atMs: snapshot.atMs,
       ...snapshot.balance === undefined ? {} : { balance: snapshot.balance },
       ...snapshot.lots === undefined ? {} : { lotCount: snapshot.lots.length },
       ...snapshot.expiringIn7d === undefined ? {} : { expiringIn7d: snapshot.expiringIn7d },

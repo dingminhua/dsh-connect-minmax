@@ -1,17 +1,36 @@
 /**
  * MiniMax 状态卡片，贡献给 Harness 的插件配置页。
  *
- * 这张卡片是**只读**的：它回答"现在能用吗、凭据从哪来、有哪些模型"，并**不**
- * 提供任何写入。本插件没有 API Key 输入项，也不保存任何凭据——凭据始终来自
- * 本机登录态，这一点在卡片上明写出来。
+ * # 形态
  *
- * 数据来自宿主的 `/plugins/dsh-connect-minmax/status` 路由（同源），10 秒
- * 轮询一次，且**只在页面可见时**轮询：后台标签页里的定时器不产生任何收益，
- * 还会让用户以为插件在偷跑。
+ * 顶部两个**区域 tab**（国内版 / 国际版）——每个 tab 是一个独立供应商，可以单独
+ * 关掉；下面三个**子页**：
  *
- * 参考：dingminhua/dsh-connect-workbuddy（MIT，Copyright (c) 2026 LaoDing）
- *   —— 卡片外壳的形态、模块加载时注入一次 `<style>` 的写法、轮询与
- *     AbortController 清理，均来自该项目。
+ *  - **账号**：本机登录态、账号副本、积分余额与到期、七天一签；
+ *  - **模型**：全目录勾选启用、逐模型测试、长上下文档位；
+ *  - **诊断**：这张卡片实际读到了什么（只读，没有任何会改动设置的控件）。
+ *
+ * 之所以是这个形态而不是"一张表平铺两条路由"：两个区域是**两个独立供应商**，
+ * 各有各的凭据、积分与登录态，用户关心的问题是"这一侧现在怎么样"，把它们塞进
+ * 同一张表就丢掉了这个语义。
+ *
+ * # 可写与不可写
+ *
+ * 卡片能写的只有 `Config` 里早就存在的三个字段（`models` / `regions` /
+ * `longContext`），见 `settings.ts`。**没有 API Key 输入项**，也永远不会加：
+ * 凭据只来自本机 MiniMax Code 的登录态，这一点在账号页明写出来。
+ *
+ * 没有 `settingsScope`（旧宿主 / 非设置页挂载）时整张卡片退化成只读，控件禁用
+ * 并说明原因——而不是假装能保存。
+ *
+ * # 数据来源
+ *
+ * 宿主的 `/plugins/dsh-connect-minmax/status`（同源），10 秒轮询一次，且**只在
+ * 页面可见时**轮询：后台标签页里的定时器不产生收益，还会让人以为插件在偷跑。
+ *
+ * 参考：dingminhua/dsh-connect-workbuddy 与 dsh-connect-qoder（MIT，
+ * Copyright (c) 2026 LaoDing）—— 卡片外壳、模块加载时注入一次 `<style>`、
+ * 轮询与 AbortController 清理、区域 tab + 子页的布局均来自这两个项目。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -21,19 +40,27 @@ import {
   durationPartsOf,
   expiryBucketOf,
   formatContextWindow,
+  MINIMAX_ACCOUNT_REMOVE_PATH,
   MINIMAX_CARD_KEYS,
   MINIMAX_DISPLAY_NAME,
   MINIMAX_GITHUB_URL,
+  MINIMAX_MODEL_TEST_PATH,
+  MINIMAX_SIGNIN_CLAIM_PATH,
   MINIMAX_STATUS_PATH,
   toStatusView,
 } from '../status-paths.ts'
 import type {
+  MiniMaxCreditsView,
   MiniMaxLoginState,
   MiniMaxLoginView,
+  MiniMaxModelView,
   MiniMaxRouteView,
+  MiniMaxSigninView,
   MiniMaxStatusView,
 } from '../status-paths.ts'
 import { MINIMAX_CARD_CSS } from './styles.ts'
+import type { MiniMaxSettingsScope } from './settings.ts'
+import { toggleRegion, writeLongContext, writeModels, writeRegions } from './settings.ts'
 
 /** 轮询间隔（毫秒）。 */
 export const MINIMAX_POLL_INTERVAL_MS = 10_000
@@ -44,10 +71,15 @@ export type MiniMaxTranslate = (key: string, params?: Record<string, unknown>) =
 /** 卡片由浏览器插件注册时注入的面。 */
 export interface MiniMaxCardInjected {
   t: MiniMaxTranslate
+  /**
+   * 设置写入面。**可选是刻意的**：没有它的宿主线路上卡片退化成只读，
+   * 保存是唯一需要它的功能。
+   */
+  settingsScope?: MiniMaxSettingsScope
 }
 
 /** 卡片 props。`view` 是宿主给的页面形态（'summary' | 'page'）。 */
-export type MiniMaxCardProps = Partial<MiniMaxCardInjected> & { view?: string }
+export type MiniMaxCardProps = Partial<MiniMaxCardInjected>
 
 /** 注入或刷新这张卡片的共享 CSS。 */
 if (typeof document !== 'undefined') {
@@ -66,6 +98,9 @@ if (typeof document !== 'undefined') {
 
 /** 登录态的视觉分档：颜色只回答"能不能用"。 */
 export type MiniMaxBadgeTone = 'ready' | 'warn' | 'error' | 'unknown'
+
+/** 子页标识。 */
+export type MiniMaxPanelKey = 'account' | 'models' | 'diagnostics'
 
 /**
  * 登录态 → 徽标分档。
@@ -338,6 +373,78 @@ export function expiryTextOf(
   }
 }
 
+export function isRegionEnabled(status: MiniMaxStatusView, region: string): boolean {
+  return status.enabledRegions.includes(region)
+}
+
+export function routesForRegion(
+  routes: readonly MiniMaxRouteView[],
+  region: string,
+): MiniMaxRouteView[] {
+  const owned = routes.filter(route => route.region === region)
+  const live = owned.filter(route => !isCopyRoute(route))
+  const copies = owned.filter(route => isCopyRoute(route))
+  return [...live, ...copies]
+}
+
+export const MINIMAX_REGIONS = ['cn', 'global'] as const
+
+export function creditsTextOf(
+  credits: MiniMaxCreditsView | undefined,
+  t: MiniMaxTranslate,
+): string {
+  if (credits?.balance === undefined) {
+    return credits?.error ?? t('credits.unavailable')
+  }
+  return `${formatCredits(credits.balance.totalRemaining)} ${t('credits.unit')}`
+}
+
+export function formatCredits(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2)
+}
+
+export function expirySummaryTextOf(
+  credits: MiniMaxCreditsView | undefined,
+  nowMs: number,
+  t: MiniMaxTranslate,
+): string {
+  if (credits === undefined) return t('credits.unavailable')
+  if (credits.error !== undefined && credits.balance === undefined) return credits.error
+  const bits: string[] = []
+  if (credits.earliestExpiryMs !== undefined) {
+    const days = Math.max(0, Math.ceil((credits.earliestExpiryMs - nowMs) / 86_400_000))
+    bits.push(t('credits.expiresIn', { days }))
+  }
+  if ((credits.expiringIn30d ?? 0) > 0) {
+    bits.push(t('credits.expiring30', { amount: formatCredits(credits.expiringIn30d ?? 0) }))
+  }
+  if (credits.lotCount !== undefined) bits.push(t('credits.lots', { count: credits.lotCount }))
+  return bits.length === 0 ? t('credits.noLots') : bits.join(' · ')
+}
+
+export function signinDayToneOf(day: { status: number }): 'claimed' | 'claimable' | 'upcoming' {
+  if (day.status === 3) return 'claimed'
+  if (day.status === 2) return 'claimable'
+  return 'upcoming'
+}
+
+/**
+ * 诊断页的"积分读取于"一行。
+ *
+ * 读不到时也要说清楚**为什么**读不到（上游错误原文），否则这一行只会显示
+ * "不可用"，用户和排查的人都无从判断是没登录、令牌过期还是上游挂了。
+ */
+export function creditsFactOf(
+  credits: MiniMaxCreditsView | undefined,
+  fallbackAtMs: number,
+  t: MiniMaxTranslate,
+): string {
+  if (credits === undefined) return t('credits.unavailable')
+  if (credits.balance === undefined) return credits.error ?? t('credits.unavailable')
+  const at = new Date(credits.atMs ?? fallbackAtMs).toLocaleString()
+  return `${creditsTextOf(credits, t)} · ${t('diagnostics.readAt', { at })}`
+}
+
 /** 一行"键：值"。 */
 function fact(key: string, value: ReactElement | string): ReactElement {
   return (
@@ -373,12 +480,476 @@ export async function fetchMiniMaxStatus(signal?: AbortSignal): Promise<MiniMaxS
   return toStatusView(payload)
 }
 
+/**
+ * 打一个动作接口。
+ *
+ * 动作接口都是宿主侧的 loopback-only POST；这里只负责"发出去 + 把话带回来"，
+ * 失败一律变成一行提示，不抛异常（卡片不该因为一次点击失败而白屏）。
+ */
+async function postAction(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean, message: string }> {
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body),
+    })
+    let payload: unknown
+    try {
+      payload = await response.json()
+    } catch {
+      return { ok: false, message: `HTTP ${response.status}` }
+    }
+    const record = (typeof payload === 'object' && payload !== null && !Array.isArray(payload))
+      ? payload as Record<string, unknown>
+      : {}
+    const ok = response.ok && record['ok'] !== false
+    const message = typeof record['message'] === 'string'
+      ? record['message']
+      : typeof record['error'] === 'string'
+        ? record['error']
+        : ok ? 'ok' : `HTTP ${response.status}`
+    return { ok, message }
+  } catch (error: unknown) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** 模型测试的一条结果。 */
+interface ModelProbe {
+  busy: boolean
+  ok?: boolean
+  detail?: string
+}
+
+/**
+ * 区域 tab 条。
+ *
+ * 每个 tab 是一个**独立供应商**：绿点回答"这一侧能不能用"，复选框回答"这一侧
+ * 要不要注册"。两边可以同时开着，不同会话各选各的。
+ */
+function RegionTabs(props: {
+  status: MiniMaxStatusView | undefined
+  active: string
+  onSelect(region: string): void
+  onToggle(region: string): void
+  canWrite: boolean
+  busyRegion: string | undefined
+  t: MiniMaxTranslate
+}): ReactElement {
+  const { status, active, onSelect, onToggle, canWrite, busyRegion, t } = props
+  return (
+    <div className="dsm-minimax-tabs" role="tablist">
+      {MINIMAX_REGIONS.map(region => {
+        const routes = status === undefined ? [] : routesForRegion(effectiveRoutesOf(status), region)
+        const enabled = status === undefined || isRegionEnabled(status, region)
+        const tone = enabled
+          ? aggregateBadgeToneOf(routes)
+          : 'unknown'
+        return (
+          <div
+            key={region}
+            className={`dsm-minimax-tab${active === region ? ' dsm-minimax-tab-on' : ''}${enabled ? '' : ' dsm-minimax-tab-off'}`}
+            role="tab"
+            aria-selected={active === region}
+          >
+            <button
+              type="button"
+              className="dsm-minimax-tab-label"
+              onClick={() => { onSelect(region) }}
+            >
+              <span className={`dsm-minimax-dot dsm-minimax-dot-${tone}`} />
+              {t(region === 'global' ? 'region.global' : 'region.cn')}
+            </button>
+            <label
+              className="dsm-minimax-tab-switch"
+              title={canWrite ? t('region.toggleHint') : t('settings.readOnly')}
+            >
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={!canWrite || busyRegion === region}
+                onChange={() => { onToggle(region) }}
+              />
+            </label>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** 子页 tab 条。 */
+function PanelTabs(props: {
+  active: MiniMaxPanelKey
+  onSelect(panel: MiniMaxPanelKey): void
+  t: MiniMaxTranslate
+}): ReactElement {
+  const { active, onSelect, t } = props
+  const panels: MiniMaxPanelKey[] = ['account', 'models', 'diagnostics']
+  return (
+    <div className="dsm-minimax-subtabs" role="tablist">
+      {panels.map(panel => (
+        <button
+          key={panel}
+          type="button"
+          role="tab"
+          aria-selected={active === panel}
+          className={`dsm-minimax-subtab${active === panel ? ' dsm-minimax-subtab-on' : ''}`}
+          onClick={() => { onSelect(panel) }}
+        >
+          {t(`panel.${panel}`)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** 账号页：本机登录 + 副本 + 积分 + 签到。 */
+function AccountPanel(props: {
+  status: MiniMaxStatusView
+  region: string
+  nowMs: number
+  busy: boolean
+  message: string | undefined
+  onClaim(): void
+  onDelete(route: MiniMaxRouteView): void
+  t: MiniMaxTranslate
+}): ReactElement {
+  const { status, region, nowMs, busy, message, onClaim, onDelete, t } = props
+  const routes = routesForRegion(effectiveRoutesOf(status), region)
+  const live = routes.find(route => !isCopyRoute(route))
+  const copies = routes.filter(route => isCopyRoute(route))
+  const signin: MiniMaxSigninView | undefined = live?.signin
+  const today = signin?.days.find(day => day.isToday)
+
+  return (
+    <div className="dsm-minimax-panel">
+      {/* 产品承诺放在账号页第一行：用户在这个页面上要确认的就是"我不会在这里被要求填 key"。 */}
+      <p className="dsm-minimax-hint">{t('promise.noApiKey')}</p>
+
+      {routes.length === 0 && (
+        <p className="dsm-minimax-hint">{t('account.noneRegistered')}</p>
+      )}
+
+      {routes.map(route => (
+        <div key={route.route} className="dsm-minimax-row">
+          <div className="dsm-minimax-row-main">
+            <div className="dsm-minimax-model-id">{route.route}</div>
+            <div className="dsm-minimax-model-name">
+              {routeProviderLabelOf(route, t)}
+              {isCopyRoute(route) && (
+                <span className="dsm-minimax-chip dsm-minimax-chip-on" style={{ marginLeft: 6 }}>
+                  {translateCopyLabel(route, t)}
+                </span>
+              )}
+            </div>
+            {route.login.state === 'authorizing' && route.login.verificationUri !== undefined && (
+              <div className="dsm-minimax-hint" style={{ marginTop: '4px' }}>
+                {route.login.userCode === undefined
+                  ? null
+                  : (
+                    <span>
+                      {t('advice.authorizingCode', { code: route.login.userCode })}
+                      {' · '}
+                    </span>
+                  )}
+                <a href={route.login.verificationUri} target="_blank" rel="noreferrer">
+                  {route.login.verificationUri}
+                </a>
+              </div>
+            )}
+            {/* 刻意不在这里重复 routeAdviceOf：顶部那条"你需要做什么"已经按路由
+                列了所有未就绪项，行内再抄一遍只会让同一句话出现两次。行内只放
+                事实：状态、到期、凭据来源。 */}
+          </div>
+          <div className="dsm-minimax-row-side">
+            <span className={`dsm-minimax-badge dsm-minimax-badge-${badgeToneOf(route.login.state)}`}>
+              <span className="dsm-minimax-badge-dot" />
+              {t(`login.${route.login.state}`)}
+            </span>
+            <span className="dsm-minimax-row-meta">{t('routes.expires')}：{expiryTextOf(route.login, nowMs, t)}</span>
+            <span className="dsm-minimax-row-meta">
+              {t('login.source')}：{t(sourceLabelKeyOf(route.login.source))}
+            </span>
+            {isCopyRoute(route) && (
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-ghost"
+                onClick={() => { onDelete(route) }}
+              >
+                {t('account.delete')}
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {copies.length > 0 && (
+        <p className="dsm-minimax-hint">{t('routes.copyHint')}</p>
+      )}
+
+      {/* 积分与签到：本机登录那条才有意义（副本的令牌属于另一个账号，读它的积分会误导）。 */}
+      {live !== undefined && (
+        <div className="dsm-minimax-credits">
+          <div className="dsm-minimax-credits-balance">
+            <div>
+              <div className="dsm-minimax-fact-key">{t('credits.balance')}</div>
+              <div className="dsm-minimax-credits-value">{creditsTextOf(live.credits, t)}</div>
+              <div className="dsm-minimax-hint">{expirySummaryTextOf(live.credits, nowMs, t)}</div>
+            </div>
+          </div>
+          <div className="dsm-minimax-signin">
+            <div className="dsm-minimax-fact-key">{t('signin.label')}</div>
+            <div className="dsm-minimax-days">
+              {(signin?.days ?? []).map(day => (
+                <span
+                  key={day.dayNo}
+                  className={`dsm-minimax-day dsm-minimax-day-${signinDayToneOf(day)}${day.isToday ? ' dsm-minimax-day-today' : ''}`}
+                  title={t('signin.dayTitle', { day: day.dayNo, points: day.points, status: day.status })}
+                >
+                  +{day.points}
+                </span>
+              ))}
+              {signin === undefined && <span className="dsm-minimax-hint">{t('signin.unavailable')}</span>}
+            </div>
+            <div className="dsm-minimax-signin-foot">
+              <span className="dsm-minimax-row-meta">
+                {today === undefined
+                  ? t('signin.noToday')
+                  : signin?.claimableToday === true
+                    ? t('signin.ready')
+                    : t('signin.done')}
+              </span>
+              <button
+                type="button"
+                className="dsm-minimax-btn dsm-minimax-btn-outline"
+                disabled={!signin?.claimableToday || busy}
+                title={signin?.claimableToday ? t('signin.claimHint') : t('signin.disabledHint')}
+                onClick={onClaim}
+              >
+                {busy ? t('signin.claiming') : t('signin.claim')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {message !== undefined && <p className="dsm-minimax-hint">{message}</p>}
+    </div>
+  )
+}
+
+/** 副本 chip 的文案。 */
+function translateCopyLabel(route: MiniMaxRouteView, t: MiniMaxTranslate): string {
+  const label = copyLabelOf(route)
+  return label === undefined ? t('routes.copy') : `${t('routes.copy')} ${label}`
+}
+
+/** 模型页：全目录勾选启用 + 测试。 */
+function ModelPanel(props: {
+  status: MiniMaxStatusView
+  region: string
+  canWrite: boolean
+  probes: Record<string, ModelProbe>
+  onToggleModel(modelId: string, enabled: boolean): void
+  onTest(modelId: string): void
+  onLongContext(enabled: boolean): void
+  busy: boolean
+  message: string | undefined
+  t: MiniMaxTranslate
+}): ReactElement {
+  const { status, region, canWrite, probes, onToggleModel, onTest, onLongContext, busy, message, t } = props
+  // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
+  // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
+  const routes = routesForRegion(effectiveRoutesOf(status), region)
+  const testRoute = routes.find(route => route.login.state === 'ready') ?? routes[0]
+  const enabledIds = new Set(status.models.map(model => model.id))
+  const catalog = status.catalog
+  const allChecked = catalog.every(model => enabledIds.has(model.id))
+
+  return (
+    <div className="dsm-minimax-panel">
+      <div className="dsm-minimax-panel-head">
+        <div>
+          <div className="dsm-minimax-panel-title">{t('models.label')}</div>
+          <div className="dsm-minimax-hint">
+            {t('models.enabledCount', { count: enabledIds.size, total: catalog.length })}
+          </div>
+        </div>
+        <div className="dsm-minimax-panel-actions">
+          <label className="dsm-minimax-inline-check" title={canWrite ? t('models.longContextHint') : t('settings.readOnly')}>
+            <input
+              type="checkbox"
+              checked={status.longContext}
+              disabled={!canWrite || busy}
+              onChange={event => { onLongContext((event.target as HTMLInputElement).checked) }}
+            />
+            {t('models.longContext')}
+          </label>
+          <button
+            type="button"
+            className="dsm-minimax-btn dsm-minimax-btn-ghost"
+            disabled={!canWrite || busy}
+            onClick={() => {
+              // 全选 = 写空列表（宿主语义：空 = 目录全部），这样以后新增的模型
+              // 会自动出现在用户面前，而不是被一次"全选"永久钉死。
+              onToggleModel('__all__', allChecked)
+            }}
+          >
+            {allChecked ? t('models.selectNone') : t('models.selectAll')}
+          </button>
+        </div>
+      </div>
+
+      {catalog.length === 0 && <p className="dsm-minimax-hint">{t('models.empty')}</p>}
+
+      {catalog.map(model => (
+        <ModelRow
+          key={model.id}
+          model={model}
+          enabled={enabledIds.has(model.id)}
+          canWrite={canWrite}
+          busy={busy}
+          probe={probes[`${region}:${model.id}`]}
+          route={testRoute?.route}
+          onToggle={onToggleModel}
+          onTest={onTest}
+          t={t}
+        />
+      ))}
+
+      {message !== undefined && <p className="dsm-minimax-hint">{message}</p>}
+      {!canWrite && <p className="dsm-minimax-hint">{t('settings.readOnly')}</p>}
+    </div>
+  )
+}
+
+/** 一行模型。 */
+function ModelRow(props: {
+  model: MiniMaxModelView
+  enabled: boolean
+  canWrite: boolean
+  busy: boolean
+  probe: ModelProbe | undefined
+  route: string | undefined
+  onToggle(modelId: string, enabled: boolean): void
+  onTest(modelId: string): void
+  t: MiniMaxTranslate
+}): ReactElement {
+  const { model, enabled, canWrite, busy, probe, route, onToggle, onTest, t } = props
+  const supportsImage = model.input.includes('image')
+  return (
+    <div className={`dsm-minimax-row${enabled ? '' : ' dsm-minimax-row-off'}`}>
+      <div className="dsm-minimax-row-main">
+        <label className="dsm-minimax-model-check" title={canWrite ? '' : t('settings.readOnly')}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={!canWrite || busy}
+            onChange={event => { onToggle(model.id, (event.target as HTMLInputElement).checked) }}
+          />
+          <span className="dsm-minimax-model-id">{model.id}</span>
+        </label>
+        <div className="dsm-minimax-model-name">
+          {model.name}
+          {model.badge === undefined
+            ? null
+            : <span className="dsm-minimax-chip dsm-minimax-chip-on" style={{ marginLeft: 6 }}>{model.badge}</span>}
+        </div>
+        <div className="dsm-minimax-model-facts">
+          <span>{t('models.context')} {formatContextWindow(model.contextWindow)}</span>
+          <span>{t('models.output')} {formatContextWindow(model.maxTokens)}</span>
+          <span className={`dsm-minimax-chip${supportsImage ? ' dsm-minimax-chip-on' : ''}`}>
+            {supportsImage ? t('models.imageYes') : t('models.imageNo')}
+          </span>
+          <span className={`dsm-minimax-chip${model.reasoning ? ' dsm-minimax-chip-on' : ''}`}>
+            {model.reasoning
+              ? (model.thinkingMode === 'forced' ? t('models.thinkingForced') : t('models.thinkingSwitchable'))
+              : t('models.reasoningNo')}
+          </span>
+        </div>
+        {probe !== undefined && (
+          <p className={`dsm-minimax-hint${probe.ok === false ? ' dsm-minimax-error' : ''}`} style={{ marginTop: '4px' }}>
+            {probe.busy ? t('models.testing') : probe.detail ?? ''}
+          </p>
+        )}
+      </div>
+      <div className="dsm-minimax-row-side">
+        <button
+          type="button"
+          className="dsm-minimax-btn dsm-minimax-btn-outline"
+          disabled={busy || !enabled || route === undefined}
+          onClick={() => { onTest(model.id) }}
+        >
+          {t('models.test')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** 诊断页：这张卡片实际读到了什么。全部只读。 */
+function DiagnosticsPanel(props: {
+  status: MiniMaxStatusView
+  region: string
+  nowMs: number
+  error: string | undefined
+  t: MiniMaxTranslate
+}): ReactElement {
+  const { status, region, nowMs, error, t } = props
+  const routes = routesForRegion(effectiveRoutesOf(status), region)
+  const live = routes.find(route => !isCopyRoute(route))
+  const copies = routes.filter(route => isCopyRoute(route))
+  const failed = routes.filter(route => route.login.state !== 'ready')
+  const checkedAt = status.checkedAt === 0 ? t('login.expiresUnknown') : new Date(status.checkedAt).toLocaleString()
+
+  return (
+    <div className="dsm-minimax-panel">
+      <dl className="dsm-minimax-facts">
+        {fact(t('region.label'), t(region === 'global' ? 'region.global' : 'region.cn'))}
+        {fact(t('region.baseUrl'), live?.baseUrl ?? status.baseUrl)}
+        {fact(t('diagnostics.route'), live?.route ?? status.route)}
+        {fact(t('diagnostics.enabledRegions'), status.enabledRegions
+          .map(entry => t(entry === 'global' ? 'region.global' : 'region.cn'))
+          .join(' / ') || t('diagnostics.none'))}
+        {fact(t('login.source'), live === undefined ? t('login.sourceNone') : t(sourceLabelKeyOf(live.login.source)))}
+        {fact(t('login.expires'), live === undefined ? t('login.expiresUnknown') : expiryTextOf(live.login, nowMs, t))}
+        {live?.login.generation === undefined
+          ? null
+          : fact(t('login.generation'), String(live.login.generation))}
+        {fact(t('diagnostics.creditsAt'), creditsFactOf(live?.credits, status.checkedAt, t))}
+        {fact(t('diagnostics.catalog'), String(status.catalog.length))}
+        {fact(t('diagnostics.enabledModels'), String(status.models.length))}
+        {fact(t('diagnostics.copies'), t('diagnostics.copyCount', { count: copies.length }))}
+        {fact(t('diagnostics.longContext'), status.longContext ? t('models.longContextOn') : t('models.longContextOff'))}
+        {fact(t('version.label'), status.pluginVersion)}
+        {fact(t('diagnostics.checkedAt'), checkedAt)}
+        {fact(
+          t('diagnostics.lastError'),
+          error ?? (failed.length === 0 ? t('diagnostics.noError') : failed
+            .map(route => `${route.route}: ${route.login.detail ?? t(`login.${route.login.state}`)}`)
+            .join('；')),
+        )}
+      </dl>
+      <p className="dsm-minimax-hint">{t('diagnostics.note')}</p>
+    </div>
+  )
+}
+
 /** 卡片本体。 */
-export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
+export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElement {
   const translate = t ?? ((key: string) => key)
   const [status, setStatus] = useState<MiniMaxStatusView | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
+  const [region, setRegion] = useState<string>('cn')
+  const [panel, setPanel] = useState<MiniMaxPanelKey>('account')
+  const [probes, setProbes] = useState<Record<string, ModelProbe>>({})
+  const [actionMessage, setActionMessage] = useState<string | undefined>(undefined)
+  const [busyRegion, setBusyRegion] = useState<string | undefined>(undefined)
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   const inFlight = useRef<AbortController | undefined>(undefined)
 
@@ -403,8 +974,7 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
 
   useEffect(() => {
     void load()
-    // 只在页面可见时轮询。后台标签页里的定时器不产生任何收益，还会让人
-    // 以为插件在偷跑；而 `visibilitychange` 回到前台时立刻补一次。
+    // 只在页面可见时轮询。
     const startTimer = (): void => {
       if (timer.current !== undefined) return
       timer.current = setInterval(() => { void load() }, MINIMAX_POLL_INTERVAL_MS)
@@ -432,9 +1002,122 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
     }
   }, [load])
 
+  /** 设置作用域订阅：宿主里改了配置，卡片要跟着刷新而不是等下一次轮询。 */
+  useEffect(() => settingsScope?.subscribe?.(() => { void load() }) ?? (() => undefined), [load, settingsScope])
+
+  const canWrite = settingsScope !== undefined
+
+  /**
+   * 写配置后立刻重读状态。
+   *
+   * 宿主应用新配置需要重新激活插件，所以这里等一下再拉：拉太早会拿到旧值，
+   * 用户看到的就是"我勾了但没生效"。
+   */
+  const afterWrite = useCallback(async (): Promise<void> => {
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await load()
+  }, [load])
+
+  const handleToggleRegion = useCallback(async (target: string): Promise<void> => {
+    if (settingsScope === undefined || status === undefined) return
+    const { next, accepted } = toggleRegion(status.enabledRegions, target)
+    if (!accepted) {
+      // 两个区域都关掉 = 插件一条路由都不注册，卡片也会跟着消失。这不是用户想要的。
+      setActionMessage(translate('region.lastOne'))
+      return
+    }
+    setBusyRegion(target)
+    try {
+      await writeRegions(settingsScope, next)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setBusyRegion(undefined)
+    }
+  }, [settingsScope, status, afterWrite, translate])
+
+  const handleToggleModel = useCallback(async (modelId: string, enabled: boolean): Promise<void> => {
+    if (settingsScope === undefined || status === undefined) return
+    const current = status.catalog.map(model => model.id)
+    const enabledIds = status.models.map(model => model.id)
+    let next: string[]
+    if (modelId === '__all__') {
+      // 「全选」写空列表（空 = 全部）；「全不选」不允许：那等于把插件自己关没。
+      next = enabled ? [] : current
+    } else {
+      const all = new Set(enabledIds.length === 0 ? current : enabledIds)
+      if (enabled) all.add(modelId)
+      else {
+        if (all.size <= 1) {
+          setActionMessage(translate('models.lastEnabled'))
+          return
+        }
+        all.delete(modelId)
+      }
+      // 按目录顺序落盘：配置里的手动顺序会被 selectModels 保留，抖动一下
+      // 就会让模型选择器里的顺序变来变去。
+      next = current.filter(id => all.has(id))
+      if (next.length === current.length) next = []
+    }
+    try {
+      await writeModels(settingsScope, next)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, status, afterWrite, translate])
+
+  const handleLongContext = useCallback(async (enabled: boolean): Promise<void> => {
+    if (settingsScope === undefined) return
+    try {
+      await writeLongContext(settingsScope, enabled)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, afterWrite])
+
+  const handleClaim = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    const outcome = await postAction(MINIMAX_SIGNIN_CLAIM_PATH, { region })
+    setActionMessage(outcome.message)
+    await load()
+    setBusy(false)
+  }, [region, load])
+
+  const handleDelete = useCallback(async (route: MiniMaxRouteView): Promise<void> => {
+    if (route.accountId === undefined) return
+    const outcome = await postAction(MINIMAX_ACCOUNT_REMOVE_PATH, { id: route.accountId })
+    setActionMessage(`${route.accountId}：${outcome.message}`)
+    await load()
+  }, [load])
+
+  const handleTest = useCallback(async (modelId: string): Promise<void> => {
+    const routes = status === undefined ? [] : routesForRegion(effectiveRoutesOf(status), region)
+    const target = routes.find(route => route.login.state === 'ready') ?? routes[0]
+    if (target === undefined) return
+    const key = `${region}:${modelId}`
+    setProbes(current => ({ ...current, [key]: { busy: true } }))
+    const started = Date.now()
+    const outcome = await postAction(MINIMAX_MODEL_TEST_PATH, { route: target.route, model: modelId })
+    setProbes(current => ({
+      ...current,
+      [key]: {
+        busy: false,
+        ok: outcome.ok,
+        detail: outcome.ok
+          ? `${translate('models.testOk')} ${Date.now() - started}ms`
+          : outcome.message,
+      },
+    }))
+  }, [region, status, translate])
+
   const nowMs = Date.now()
   const login = status?.login
-  // `routes` 为空（旧版本应答）时退化成单路由渲染，不会白屏。
   const routes = status === undefined ? [] : effectiveRoutesOf(status)
   const unreadyRoutes = routes.filter(route => route.login.state !== 'ready')
 
@@ -449,181 +1132,71 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
           </span>
           {unreadyRoutes.length > 0
             ? unreadyRoutes.map(route => (
-              <p
-                key={`advice:${route.route}`}
-                className="dsm-minimax-hint"
-                style={{ marginTop: '8px' }}
-              >
+              <p key={`advice:${route.route}`} className="dsm-minimax-hint" style={{ marginTop: '8px' }}>
                 {routeAdviceOf(route, translate)}
               </p>
             ))
             : login !== undefined
-              ? (
-                <p className="dsm-minimax-hint" style={{ marginTop: '8px' }}>
-                  {loginAdviceOf(login, translate)}
-                </p>
-              )
+              ? <p className="dsm-minimax-hint" style={{ marginTop: '8px' }}>{loginAdviceOf(login, translate)}</p>
               : null}
-          {/* 产品承诺：明写出来。用户要确认的正是这一点。 */}
-          <p className="dsm-minimax-hint" style={{ marginTop: '4px' }}>
-            {translate('promise.noApiKey')}
-          </p>
         </div>
 
-        {/* 路由区块：每个区域一条 */}
-        {routes.length > 0 && (
-          <div>
-            <p className="dsm-minimax-fact-key" style={{ margin: '0 0 8px' }}>
-              {translate('routes.label')}
-            </p>
-            <table className="dsm-minimax-models">
-              <thead>
-                <tr>
-                  <th>{translate('routes.provider')}</th>
-                  <th>{translate('region.label')}</th>
-                  <th>{translate('routes.state')}</th>
-                  <th>{translate('routes.expires')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {routes.map(route => (
-                  <tr key={route.route}>
-                    <td>
-                      <div className="dsm-minimax-model-id">{route.route}</div>
-                      <div className="dsm-minimax-model-name">
-                        {routeProviderLabelOf(route, translate)}
-                      </div>
-                    </td>
-                    <td title={route.regionLabel}>
-                      {translate(route.region === 'global' ? 'region.global' : 'region.cn')}
-                      {isCopyRoute(route) && (
-                        <span className="dsm-minimax-chip dsm-minimax-chip-on" style={{ marginLeft: 6 }}>
-                          {translate('routes.copy')}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`dsm-minimax-badge dsm-minimax-badge-${badgeToneOf(route.login.state)}`}>
-                        <span className="dsm-minimax-badge-dot" />
-                        {translate(`login.${route.login.state}`)}
-                      </span>
-                      {route.login.state === 'authorizing'
-                        && route.login.verificationUri !== undefined
-                        && (
-                          <div className="dsm-minimax-hint" style={{ marginTop: '4px' }}>
-                            {route.login.userCode === undefined
-                              ? null
-                              : (
-                                <span>
-                                  {translate('advice.authorizingCode', { code: route.login.userCode })}
-                                  {' · '}
-                                </span>
-                              )}
-                            <a href={route.login.verificationUri} target="_blank" rel="noreferrer">
-                              {route.login.verificationUri}
-                            </a>
-                          </div>
-                        )}
-                    </td>
-                    <td>{expiryTextOf(route.login, nowMs, translate)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {/* 账号副本是什么：一句小字解释，紧贴路由表。只在**真的有副本**时才出现——
-                没有副本时解释一个不存在的概念，只会让新用户以为漏配了什么。 */}
-            {routes.some(isCopyRoute) && (
-              <p className="dsm-minimax-hint" style={{ marginTop: '8px' }}>
-                {translate('routes.copyHint')}
-              </p>
-            )}
-          </div>
-        )}
+        <RegionTabs
+          status={status}
+          active={region}
+          onSelect={setRegion}
+          onToggle={route => { void handleToggleRegion(route) }}
+          canWrite={canWrite}
+          busyRegion={busyRegion}
+          t={translate}
+        />
+        <p className="dsm-minimax-hint">{translate('region.tabHint')}</p>
 
-        {/* 事实表 */}
-        {status !== undefined && (
-          <dl className="dsm-minimax-facts">
-            {fact(translate('login.source'), translate(sourceLabelKeyOf(status.login.source)))}
-            {fact(translate('region.label'), `${status.regionLabel} (${status.region})`)}
-            {fact(translate('region.baseUrl'), status.baseUrl)}
-            {fact(translate('route.label'), status.route)}
-            {status.login.generation === undefined
-              ? null
-              : fact(translate('login.generation'), String(status.login.generation))}
-            {fact(translate('login.expires'), expiryTextOf(status.login, nowMs, translate))}
-            {fact(translate('version.label'), status.pluginVersion)}
-          </dl>
-        )}
+        <PanelTabs active={panel} onSelect={setPanel} t={translate} />
+
+        {status === undefined
+          ? <p className="dsm-minimax-hint">{translate(error === undefined ? 'badge.loading' : 'row.unreachable')}</p>
+          : panel === 'account'
+            ? (
+              <AccountPanel
+                status={status}
+                region={region}
+                nowMs={nowMs}
+                busy={busy}
+                message={actionMessage}
+                onClaim={() => { void handleClaim() }}
+                onDelete={route => { void handleDelete(route) }}
+                t={translate}
+              />
+            )
+            : panel === 'models'
+              ? (
+                <ModelPanel
+                  status={status}
+                  region={region}
+                  canWrite={canWrite}
+                  probes={probes}
+                  onToggleModel={(id, enabled) => { void handleToggleModel(id, enabled) }}
+                  onTest={id => { void handleTest(id) }}
+                  onLongContext={enabled => { void handleLongContext(enabled) }}
+                  busy={busy}
+                  message={actionMessage}
+                  t={translate}
+                />
+              )
+              : (
+                <DiagnosticsPanel
+                  status={status}
+                  region={region}
+                  nowMs={nowMs}
+                  error={error}
+                  t={translate}
+                />
+              )}
 
         {/* 最近错误 */}
         {error !== undefined && (
-          <p className="dsm-minimax-error">
-            {translate('row.unreachable')}{error === '' ? '' : `: ${error}`}
-          </p>
-        )}
-        {login?.state === 'error' && login.detail !== undefined && (
-          <p className="dsm-minimax-error">{login.detail}</p>
-        )}
-
-        {/* 模型表 */}
-        {status !== undefined && (
-          <div>
-            <p className="dsm-minimax-fact-key" style={{ margin: '0 0 8px' }}>
-              {translate('models.label')} · {translate('models.count', { count: status.models.length })}
-            </p>
-            {status.models.length === 0
-              ? <p className="dsm-minimax-hint">{translate('models.empty')}</p>
-              : (
-                <table className="dsm-minimax-models">
-                  <thead>
-                    <tr>
-                      <th>{translate('models.label')}</th>
-                      <th>{translate('models.context')}</th>
-                      <th>{translate('models.output')}</th>
-                      <th>{translate('models.image')}</th>
-                      <th>{translate('models.reasoning')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {status.models.map(model => (
-                      <tr key={model.id}>
-                        <td>
-                          <div className="dsm-minimax-model-id">{model.id}</div>
-                          <div className="dsm-minimax-model-name">
-                            {model.name}
-                            {model.badge === undefined
-                              ? null
-                              : <span className="dsm-minimax-chip dsm-minimax-chip-on" style={{ marginLeft: 6 }}>
-                                  {model.badge}
-                                </span>}
-                          </div>
-                        </td>
-                        <td>{formatContextWindow(model.contextWindow)}</td>
-                        <td>{formatContextWindow(model.maxTokens)}</td>
-                        <td>
-                          <span className={`dsm-minimax-chip${model.input.includes('image') ? ' dsm-minimax-chip-on' : ''}`}>
-                            {model.input.includes('image')
-                              ? translate('models.imageYes')
-                              : translate('models.imageNo')}
-                          </span>
-                        </td>
-                        <td>
-                          {model.reasoning
-                            ? (
-                              <span className="dsm-minimax-chip dsm-minimax-chip-on">
-                                {model.thinkingMode === 'forced'
-                                  ? translate('models.thinkingForced')
-                                  : translate('models.thinkingSwitchable')}
-                              </span>
-                            )
-                            : <span className="dsm-minimax-chip">{translate('models.reasoningNo')}</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-          </div>
+          <p className="dsm-minimax-error">{translate('row.unreachable')}{error === '' ? '' : `: ${error}`}</p>
         )}
 
         {/* 操作行 */}
@@ -636,12 +1209,7 @@ export function MiniMaxCard({ t }: MiniMaxCardProps): ReactElement {
           >
             {busy ? translate('row.refreshing') : translate('row.refresh')}
           </button>
-          <a
-            className="dsm-minimax-updated"
-            href={MINIMAX_GITHUB_URL}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
+          <a className="dsm-minimax-updated" href={MINIMAX_GITHUB_URL} target="_blank" rel="noreferrer noopener">
             {MINIMAX_DISPLAY_NAME}
           </a>
         </div>

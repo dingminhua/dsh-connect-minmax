@@ -154,4 +154,100 @@ export const MINIMAX_CARD_CSS = `
 .dsm-minimax-updated{
   color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;line-height:16px;
 }
+
+/* ---- 区域 tab：每个 tab 是一个独立供应商 ---- */
+.dsm-minimax-tabs{
+  display:flex;gap:8px;flex-wrap:wrap;
+}
+.dsm-minimax-tab{
+  display:flex;align-items:center;gap:8px;flex:1 1 220px;min-width:0;
+  padding:9px 12px;border-radius:10px;
+  border:1px solid var(--dsw-alias-border-l2,#36373b);
+  background:var(--dsw-alias-bg-layer-2,#1a1b1f);
+}
+.dsm-minimax-tab-on{border-color:var(--dsw-alias-brand-primary,#5686fe);background:rgba(86,134,254,.08)}
+.dsm-minimax-tab-off{opacity:.62}
+.dsm-minimax-tab-label{
+  display:flex;align-items:center;gap:7px;flex:1;min-width:0;
+  background:transparent;border:0;padding:0;cursor:pointer;text-align:left;
+  color:var(--dsw-alias-label-primary,#e6e6e6);font-size:13px;font-weight:600;
+}
+.dsm-minimax-tab-switch{display:flex;align-items:center;cursor:pointer}
+.dsm-minimax-tab-switch input{cursor:pointer}
+
+/* 状态点：颜色只回答"这一侧能不能用" */
+.dsm-minimax-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-label-tertiary,#9aa0a8)}
+.dsm-minimax-dot-ready{background:#3fb950}
+.dsm-minimax-dot-warn{background:#d29922}
+.dsm-minimax-dot-error{background:#f85149}
+.dsm-minimax-dot-unknown{background:#6e7681}
+
+/* ---- 子页 tab ---- */
+.dsm-minimax-subtabs{display:flex;gap:18px;border-bottom:1px solid var(--dsw-alias-border-l2,#36373b)}
+.dsm-minimax-subtab{
+  background:transparent;border:0;cursor:pointer;padding:7px 0 8px;
+  color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:13px;
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.dsm-minimax-subtab-on{
+  color:var(--dsw-alias-label-primary,#e6e6e6);font-weight:600;
+  border-bottom-color:var(--dsw-alias-brand-primary,#5686fe);
+}
+.dsm-minimax-panel{display:flex;flex-direction:column;gap:10px}
+.dsm-minimax-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.dsm-minimax-panel-title{color:var(--dsw-alias-label-primary,#e6e6e6);font-size:14px;font-weight:600}
+.dsm-minimax-panel-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dsm-minimax-inline-check{
+  display:flex;align-items:center;gap:6px;font-size:12px;
+  color:var(--dsw-alias-label-secondary,#c6c9d0);cursor:pointer;
+}
+
+/* ---- 条目行（账号 / 模型共用外壳） ---- */
+.dsm-minimax-row{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  padding:10px 12px;border-radius:10px;
+  border:1px solid var(--dsw-alias-border-l2,#36373b);
+  background:var(--dsw-alias-bg-layer-2,#1a1b1f);
+}
+.dsm-minimax-row-off{opacity:.6}
+.dsm-minimax-row-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.dsm-minimax-row-side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:none}
+.dsm-minimax-row-meta{
+  color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:11px;line-height:15px;
+  text-align:right;max-width:280px;
+}
+.dsm-minimax-model-check{display:flex;align-items:center;gap:8px;cursor:pointer}
+.dsm-minimax-model-check input{cursor:pointer}
+.dsm-minimax-model-facts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+
+/* ---- 积分与签到 ---- */
+.dsm-minimax-credits{
+  display:flex;gap:12px;flex-wrap:wrap;
+  padding:10px 12px;border-radius:10px;
+  border:1px solid var(--dsw-alias-border-l2,#36373b);
+}
+.dsm-minimax-credits-balance{flex:1 1 180px;min-width:0}
+.dsm-minimax-credits-value{
+  color:var(--dsw-alias-label-primary,#e6e6e6);font-size:20px;font-weight:600;line-height:1.3;
+}
+.dsm-minimax-signin{flex:1 1 240px;min-width:0;display:flex;flex-direction:column;gap:6px}
+.dsm-minimax-days{display:flex;gap:4px;flex-wrap:wrap}
+.dsm-minimax-day{
+  padding:2px 7px;border-radius:6px;font-size:11px;line-height:18px;white-space:nowrap;
+  border:1px solid var(--dsw-alias-border-l2,#36373b);
+  color:var(--dsw-alias-label-tertiary,#9aa0a8);background:transparent;
+}
+.dsm-minimax-day-claimed{border-color:rgba(63,185,80,.45);color:#3fb950;background:rgba(63,185,80,.1)}
+.dsm-minimax-day-claimable{border-color:rgba(210,153,34,.5);color:#d29922;background:rgba(210,153,34,.1)}
+.dsm-minimax-day-today{font-weight:700}
+.dsm-minimax-signin-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+
+/* ---- 幽灵按钮（删除这类次要动作） ---- */
+.dsm-minimax-btn-ghost{
+  background:transparent;border:1px solid transparent;cursor:pointer;padding:3px 9px;border-radius:7px;
+  color:var(--dsw-alias-label-tertiary,#9aa0a8);font-size:12px;
+}
+.dsm-minimax-btn-ghost:hover{
+  color:#f85149;border-color:rgba(248,81,73,.4);background:rgba(248,81,73,.08);
+}
 `
