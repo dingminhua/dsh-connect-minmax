@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "MiniMax (local sign-in)",
+    "title": "@dmh2002/dsh-connect-minmax",
     "description": "Brings the locally signed-in MiniMax (MiniMax Code / mcode) account into DeepSeek Harness: no API key, reads the local sign-in and registers two provider routes, minimax (China) and minimax-global (Global), with a settings card showing both regions’ sign-in source, expiry and model catalog."
   }
 }

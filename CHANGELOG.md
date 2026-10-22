@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- 插件页标题改成包名 `@dmh2002/dsh-connect-minmax`（与 qoder / trae / workbuddy 一致）：
+  这一列由 `locale/*.json` 的 `meta.title` 决定，一旦填了就覆盖包名，之前填的是
+  「MiniMax（本机登录）」，所以在列表里与兄弟插件长得不一样。
+
 ## 0.4.0
 
 多账号：**账号副本**（MiniMax Code 每区域只能留一个登录，换了账号旧的那个还在）。
