@@ -145,6 +145,15 @@ export interface MiniMaxStatusPayload {
   catalog?: MiniMaxStatusModel[]
   /** 当前注册了哪些区域；未列出的区域在卡片上是"关"。 */
   enabledRegions?: string[]
+  /**
+   * **已保存**的逐模型覆盖值（图片 / 可关闭思考 / 上下文档位）。
+   *
+   * 卡片靠它给草稿一个正确基线：草稿要能区分"用户还没动过"与"用户把它设成了
+   * 这个值"。没有这一段，草稿就只能靠"当前请求里生效的值"反推——那已经是
+   * 投影后的结果（掩码过的），拿它当基线会把"未设置"和"显式设为 false"混成
+   * 一件事，放弃修改也还原不回去。
+   */
+  modelOverrides?: MiniMaxModelOverrides
   /** 是否启用 1M 长上下文档。 */
   longContext?: boolean
   /** provider 级默认思考档位（宿主未指定档位时用）。 */
@@ -187,6 +196,16 @@ export interface MiniMaxStatusAuth {
    * "登录出错"。
    */
   readonly lastFailure?: string | undefined
+}
+
+/** 已保存的逐模型覆盖值。 */
+export interface MiniMaxModelOverrides {
+  /** 模型 id → 是否发送图片。 */
+  images?: Record<string, boolean>
+  /** 模型 id → 是否提供「关闭思考」档。 */
+  thinkingOff?: Record<string, boolean>
+  /** 模型 id → 上下文档位。 */
+  contextWindows?: Record<string, number>
 }
 
 /** 状态路由依赖的模型目录（只取卡片要展示的字段）。 */
@@ -250,6 +269,8 @@ export interface MiniMaxStatusDeps {
   catalog?: readonly MiniMaxStatusModelSpec[]
   /** 配置里启用的区域。 */
   enabledRegions?: readonly string[]
+  /** 已保存的逐模型覆盖值（给卡片的草稿一个正确基线）。 */
+  modelOverrides?: MiniMaxModelOverrides
   /** 长上下文档位。 */
   longContext?: boolean
   /** 默认思考档位。 */
@@ -547,6 +568,7 @@ export async function buildMiniMaxStatus(
     models: toStatusModels(deps.models),
     ...deps.catalog === undefined ? {} : { catalog: toStatusModels(deps.catalog) },
     ...deps.enabledRegions === undefined ? {} : { enabledRegions: [...deps.enabledRegions] },
+    ...deps.modelOverrides === undefined ? {} : { modelOverrides: deps.modelOverrides },
     ...deps.longContext === undefined ? {} : { longContext: deps.longContext },
     ...deps.reasoningEffort === undefined ? {} : { reasoningEffort: deps.reasoningEffort },
     pluginVersion: deps.version,
@@ -605,6 +627,7 @@ export function registerMiniMaxStatusRoute(
           models: toStatusModels(deps.models),
           ...deps.catalog === undefined ? {} : { catalog: toStatusModels(deps.catalog) },
           ...deps.enabledRegions === undefined ? {} : { enabledRegions: [...deps.enabledRegions] },
+          ...deps.modelOverrides === undefined ? {} : { modelOverrides: deps.modelOverrides },
           ...deps.longContext === undefined ? {} : { longContext: deps.longContext },
           ...deps.reasoningEffort === undefined ? {} : { reasoningEffort: deps.reasoningEffort },
           pluginVersion: deps.version,

@@ -706,6 +706,13 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       enabledRegions: requestedRegions,
       longContext,
       reasoningEffort,
+      // 已保存的逐模型覆盖：卡片靠它给草稿一个正确基线（"没动过"与"显式设成
+      // 这个值"必须分得开，否则放弃修改还原不回去）。
+      modelOverrides: {
+        ...config.modelImages === undefined ? {} : { images: config.modelImages },
+        ...config.modelThinkingOff === undefined ? {} : { thinkingOff: config.modelThinkingOff },
+        ...config.modelContextWindows === undefined ? {} : { contextWindows: config.modelContextWindows },
+      },
       version: PLUGIN_VERSION,
     })
     registerActions(context)

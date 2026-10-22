@@ -234,6 +234,7 @@ describe('effectiveRoutesOf', () => {
     enabledRegions: ['cn', 'global'],
     longContext: false,
     reasoningEffort: 'medium',
+    modelOverrides: { images: {}, thinkingOff: {}, contextWindows: {} },
     pluginVersion: '0.1.0',
     checkedAt: 0,
   }
@@ -465,6 +466,7 @@ function statusOf(options: {
     enabledRegions: options.regions ?? ['cn', 'global'],
     longContext: false,
     reasoningEffort: 'medium',
+    modelOverrides: { images: {}, thinkingOff: {}, contextWindows: {} },
     pluginVersion: '0.1.0',
     checkedAt: 0,
   }

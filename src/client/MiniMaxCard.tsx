@@ -33,8 +33,11 @@
  * 轮询与 AbortController 清理、区域 tab + 子页的布局均来自这两个项目。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
+
+/** 仓库地址：底部「鼓励一下」指向它。 */
+const MINIMAX_REPO_URL = 'https://github.com/dingminhua/dsh-connect-minmax'
 
 import {
   durationPartsOf,
@@ -838,6 +841,18 @@ function ModelPanel(props: {
   onThinkingOff(modelId: string, allow: boolean): void
   onSelectAll(): void
   onTest(modelId: string): void
+  /** 草稿：勾选启用的模型 id。 */
+  draftEnabledIds: readonly string[]
+  /** 草稿：模型 id → 是否发送图片。 */
+  draftImages: Record<string, boolean>
+  /** 草稿：模型 id → 是否提供「关闭思考」档。 */
+  draftThinkingOff: Record<string, boolean>
+  /** 草稿：模型 id → 上下文档位。 */
+  draftContextWindows: Record<string, number>
+  /** 草稿是否有未保存的改动。 */
+  dirty: boolean
+  onSave(): void
+  onDiscard(): void
   onRefresh(): void
   busy: boolean
   message: string | undefined
@@ -846,12 +861,14 @@ function ModelPanel(props: {
   const {
     status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onThinkingOff,
     onSelectAll, onTest, onRefresh, busy, message, t,
+    draftEnabledIds, draftImages, draftThinkingOff, draftContextWindows, dirty, onSave, onDiscard,
   } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
   const routes = routesForRegion(effectiveRoutesOf(status), region)
   const testRoute = routes.find(route => route.login.state === 'ready') ?? routes[0]
-  const enabledIds = new Set(status.models.map(model => model.id))
+  // 有草稿时以草稿为准（用户改过但还没保存）；没有草稿就是已保存的值。
+  const enabledIds = new Set(draftEnabledIds)
   const catalog = status.catalog
   const allChecked = catalog.every(model => enabledIds.has(model.id))
 
@@ -859,7 +876,10 @@ function ModelPanel(props: {
     <div className="dsm-minimax-panel">
       <div className="dsm-minimax-panel-head">
         <div>
-          <div className="dsm-minimax-panel-title">{t('models.label')}</div>
+          <div className="dsm-minimax-panel-title">
+            {t('models.label')}
+            {dirty ? <span className="dsm-minimax-dirty">{t('models.dirty')}</span> : null}
+          </div>
           <div className="dsm-minimax-hint">
             {t('models.enabledCount', { count: enabledIds.size, total: catalog.length })}
           </div>
@@ -899,6 +919,9 @@ function ModelPanel(props: {
           busy={busy}
           probe={probes[`${region}:${model.id}`]}
           route={testRoute?.route}
+          draftImages={draftImages}
+          draftThinkingOff={draftThinkingOff}
+          draftContextWindows={draftContextWindows}
           onToggle={onToggleModel}
           onModelContext={onModelContext}
           onModelImages={onModelImages}
@@ -912,10 +935,58 @@ function ModelPanel(props: {
       {/* 与 Qoder 的模型页一致：把"这一页只展示上游明确公布的能力"写在底部，
           用户就不会指望这里出现上游没声明的档位。 */}
       <p className="dsm-minimax-hint">{t('models.capabilityNote')}</p>
+
+      {/* 底部操作条：草稿的「放弃修改 / 保存」+ 一句鼓励（Qoder/workbuddy 同款）。 */}
+      <div className="dsm-minimax-model-actions">
+        <a
+          className="dsm-minimax-cheer"
+          href={MINIMAX_REPO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t('models.cheer')}
+          <span className="dsm-minimax-cheer-star" aria-hidden="true">★</span>
+        </a>
+        <div className="dsm-minimax-model-actions-buttons">
+          <button
+            type="button"
+            className="dsm-minimax-btn dsm-minimax-btn-outline"
+            disabled={!dirty || !canWrite || busy}
+            onClick={onDiscard}
+          >
+            {t('models.discard')}
+          </button>
+          <button
+            type="button"
+            className="dsm-minimax-btn dsm-minimax-btn-primary"
+            disabled={!dirty || !canWrite || busy}
+            onClick={onSave}
+          >
+            {busy ? t('models.saving') : t('models.save')}
+          </button>
+        </div>
+      </div>
       {message !== undefined && <p className="dsm-minimax-hint">{message}</p>}
       {!canWrite && <p className="dsm-minimax-hint">{t('settings.readOnly')}</p>}
     </div>
   )
+}
+
+/**
+ * 模型页草稿：用户改动先落在这里，底部「保存」才写回配置。
+ *
+ * 四个字段与插件配置一一对应（`models` / `modelImages` / `modelThinkingOff` /
+ * `modelContextWindows`），都不分区域，所以草稿是**全局一份**。
+ */
+interface ModelDraft {
+  /** 勾选启用的模型 id。空数组 = 一个都不启用。 */
+  enabledIds: string[]
+  /** 模型 id → 是否发送图片。 */
+  images: Record<string, boolean>
+  /** 模型 id → 是否提供「关闭思考」档。 */
+  thinkingOff: Record<string, boolean>
+  /** 模型 id → 上下文档位。 */
+  contextWindows: Record<string, number>
 }
 
 /** 一行模型。 */
@@ -926,6 +997,12 @@ function ModelRow(props: {
   busy: boolean
   probe: ModelProbe | undefined
   route: string | undefined
+  /** 草稿里的图片开关；undefined = 用已保存的值。 */
+  draftImages: Record<string, boolean>
+  /** 草稿里的「可关闭思考」；undefined = 用已保存的值。 */
+  draftThinkingOff: Record<string, boolean>
+  /** 草稿里的上下文档位；undefined = 用已保存的值。 */
+  draftContextWindows: Record<string, number>
   onToggle(modelId: string, enabled: boolean): void
   onModelContext(modelId: string, window: number): void
   onModelImages(modelId: string, enabled: boolean): void
@@ -935,15 +1012,19 @@ function ModelRow(props: {
 }): ReactElement {
   const {
     model, enabled, canWrite, busy, probe, route,
+    draftImages, draftThinkingOff, draftContextWindows,
     onToggle, onModelContext, onModelImages, onThinkingOff, onTest, t,
   } = props
   // 上游能力与"当前是否发图"是两件事：`input` 是被 modelImages 掩码后的结果。
   // 只看它就画控件的话，用户一关图片复选框就消失，再也勾不回来了。
   const upstreamImages = (model.upstreamInput.length > 0 ? model.upstreamInput : model.input).includes('image')
-  const sendsImages = model.input.includes('image')
+  // 草稿优先：用户改了还没保存时，界面要显示草稿里的值。
+  const sendsImages = draftImages[model.id] ?? model.input.includes('image')
+  const thinkingOff = draftThinkingOff[model.id] ?? model.thinkingOff
+  const contextWindow = draftContextWindows[model.id] ?? model.contextWindow
+  const tiers = (model.contextWindowOptions.length > 0 ? model.contextWindowOptions : [model.contextWindow])
   // 强制思考的模型**不提供** off 档（上游会拒绝），所以这一项要禁用并标出来。
   const offBlocked = model.thinkingMode === 'forced'
-  const tiers = model.contextWindowOptions.length > 0 ? model.contextWindowOptions : [model.contextWindow]
 
   return (
     <div className={`dsm-minimax-model${enabled ? '' : ' dsm-minimax-model-disabled'}`}>
@@ -982,7 +1063,7 @@ function ModelRow(props: {
           >
             <input
               type="checkbox"
-              checked={!offBlocked && model.thinkingOff}
+              checked={!offBlocked && thinkingOff}
               disabled={!canWrite || busy || offBlocked}
               onChange={event => { onThinkingOff(model.id, (event.target as HTMLInputElement).checked) }}
             />
@@ -995,7 +1076,7 @@ function ModelRow(props: {
           <span className="dsm-minimax-inline-picker" title={t('models.tierLabel')}>
             <select
               className="dsm-minimax-inline-select"
-              value={String(model.contextWindow)}
+              value={String(contextWindow)}
               disabled={!canWrite || busy || tiers.length <= 1}
               onChange={event => { onModelContext(model.id, Number((event.target as HTMLSelectElement).value)) }}
             >
@@ -1018,7 +1099,7 @@ function ModelRow(props: {
       </div>
 
       <div className="dsm-minimax-model-meta">
-        <span>{t('models.context')} {formatContextWindow(model.contextWindow)}</span>
+        <span>{t('models.context')} {formatContextWindow(contextWindow)}</span>
         <span>{t('models.output')} {formatContextWindow(model.maxTokens)}</span>
       </div>
 
@@ -1091,6 +1172,25 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
   const [region, setRegion] = useState<string>('cn')
   const [panel, setPanel] = useState<MiniMaxPanelKey>('account')
   const [probes, setProbes] = useState<Record<string, ModelProbe>>({})
+  /**
+   * 模型页的**草稿**。
+   *
+   * 与 Qoder/workbuddy 同款：改动先落在草稿里，底部「保存」才写回配置，
+   * 「放弃修改」丢弃。好处是批量改多个模型只写一次，中途失败不会留下半套配置；
+   * 代价是用户改完没点保存就关页面会丢——所以标题旁要有 dirty 徽章提示。
+   *
+   * 草稿是**全局**的一份（模型启用、图片、思考、档位这几个配置字段都不分区域）。
+   */
+  const [draft, setDraft] = useState<ModelDraft | undefined>(undefined)
+  /**
+   * **已保存**的基线快照。
+   *
+   * dirty 判定必须拿它比对，而不是每次从 `status` 现算：保存写入配置后，宿主要
+   * 重新激活插件才会把新值反映到 status 上（中间有几百毫秒）。那段时间里
+   * 现算的基线还是**旧值**，于是刚保存完就又显示"未保存"——用户以为没保存成功，
+   * 可能又点一次。
+   */
+  const [savedBase, setSavedBase] = useState<ModelDraft | undefined>(undefined)
   const [actionMessage, setActionMessage] = useState<string | undefined>(undefined)
   const [busyRegion, setBusyRegion] = useState<string | undefined>(undefined)
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
@@ -1181,44 +1281,91 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [settingsScope, status, afterWrite, translate])
 
-  const handleToggleModel = useCallback(async (modelId: string, enabled: boolean): Promise<void> => {
-    if (settingsScope === undefined || status === undefined) return
-    const next = nextModelSelection(status, modelId, enabled)
-    if (next === null) {
-      // 关到只剩最后一个：不允许，那等于把插件自己关没。
-      setActionMessage(translate('models.lastEnabled'))
-      return
+  /**
+   * 从已保存的状态派生出草稿基线。
+   *
+   * 基线必须来自**已保存的覆盖值**（`status.modelOverrides`）而不是"当前生效
+   * 的投影"：投影已经被掩码过了（`modelImages: false` 会让 `input` 少一个
+   * image），拿它当基线就分不清"用户没动过"和"用户显式关掉了"。
+   */
+  const draftBase = useCallback((): ModelDraft | undefined => {
+    if (status === undefined) return undefined
+    const overrides = status.modelOverrides
+    const enabledIds = status.models.map(model => model.id)
+    const images: Record<string, boolean> = {}
+    const thinkingOff: Record<string, boolean> = {}
+    const contextWindows: Record<string, number> = {}
+    for (const model of status.catalog) {
+      images[model.id] = overrides.images[model.id] ?? model.input.includes('image')
+      thinkingOff[model.id] = overrides.thinkingOff[model.id] ?? model.thinkingOff
+      contextWindows[model.id] = overrides.contextWindows[model.id] ?? model.contextWindow
     }
-    try {
-      await writeModels(settingsScope, next)
-      setActionMessage(undefined)
-      await afterWrite()
-    } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [settingsScope, status, afterWrite, translate])
+    return { enabledIds, images, thinkingOff, contextWindows }
+  }, [status])
 
-  const handleModelContext = useCallback(async (modelId: string, window: number): Promise<void> => {
-    if (settingsScope === undefined) return
-    try {
-      await writeModelContextWindow(settingsScope, modelId, window)
-      setActionMessage(undefined)
-      await afterWrite()
-    } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+  /**
+   * 草稿是否与已保存的值不同（= 有未保存的改动）。
+   *
+   * 逐字段比：任一不同就是 dirty。全同则 dirty = false，"放弃修改"也就没意义。
+   */
+  const draftDirty = useMemo((): boolean => {
+    if (draft === undefined || status === undefined) return false
+    const base = savedBase ?? draftBase()
+    if (base === undefined) return false
+    const savedIds = new Set(status.models.map(model => model.id))
+    if (draft.enabledIds.length !== savedIds.size) return true
+    if (draft.enabledIds.some(id => !savedIds.has(id))) return true
+    for (const [id, value] of Object.entries(draft.images)) {
+      const saved = base.images[id]
+      if (saved !== undefined && saved !== value) return true
     }
-  }, [settingsScope, afterWrite])
+    for (const [id, value] of Object.entries(draft.thinkingOff)) {
+      const saved = base.thinkingOff[id]
+      if (saved !== undefined && saved !== value) return true
+    }
+    for (const [id, value] of Object.entries(draft.contextWindows)) {
+      const saved = base.contextWindows[id]
+      if (saved !== undefined && saved !== value) return true
+    }
+    return false
+  }, [draft, status, savedBase, draftBase])
 
-  const handleModelImages = useCallback(async (modelId: string, wants: boolean): Promise<void> => {
-    if (settingsScope === undefined) return
-    try {
-      await writeModelImages(settingsScope, modelId, wants)
-      setActionMessage(undefined)
-      await afterWrite()
-    } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+  /** 改草稿：先按需从已保存值建基线，再改。 */
+  const editDraft = useCallback((mutate: (draft: ModelDraft) => ModelDraft): void => {
+    setDraft(previous => {
+      const base = previous ?? draftBase()
+      if (base === undefined) return previous
+      return mutate(base)
+    })
+  }, [draftBase])
+
+  const handleToggleModel = useCallback((modelId: string, enabled: boolean): void => {
+    if (status === undefined) return
+    const current = new Set(draft?.enabledIds ?? status.models.map(model => model.id))
+    if (enabled) {
+      current.add(modelId)
+    } else {
+      current.delete(modelId)
+      if (current.size === 0) {
+        // 关到只剩最后一个：不允许，那等于把插件自己关没。
+        setActionMessage(translate('models.lastEnabled'))
+        return
+      }
     }
-  }, [settingsScope, afterWrite])
+    // 落盘顺序按目录顺序，避免"保存"出来的名单顺序随勾选顺序乱跳。
+    const ordered = status.catalog
+      .map(model => model.id)
+      .filter(id => current.has(id))
+    editDraft(prev => ({ ...prev, enabledIds: ordered }))
+  }, [status, draft, editDraft, translate])
+
+  const handleModelContext = useCallback((modelId: string, window: number): void => {
+    editDraft(prev => ({ ...prev, contextWindows: { ...prev.contextWindows, [modelId]: window } }))
+  }, [editDraft])
+
+  const handleModelImages = useCallback((modelId: string, wants: boolean): void => {
+    editDraft(prev => ({ ...prev, images: { ...prev.images, [modelId]: wants } }))
+  }, [editDraft])
 
   const handleSelectAccount = useCallback(async (id: string): Promise<void> => {
     try {
@@ -1234,16 +1381,9 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [region, afterWrite])
 
-  const handleThinkingOff = useCallback(async (modelId: string, allow: boolean): Promise<void> => {
-    if (settingsScope === undefined) return
-    try {
-      await writeModelThinkingOff(settingsScope, modelId, allow)
-      setActionMessage(undefined)
-      await afterWrite()
-    } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [settingsScope, afterWrite])
+  const handleThinkingOff = useCallback((modelId: string, allow: boolean): void => {
+    editDraft(prev => ({ ...prev, thinkingOff: { ...prev.thinkingOff, [modelId]: allow } }))
+  }, [editDraft])
 
   const handleRefresh = useCallback(async (): Promise<void> => {
     setBusy(true)
@@ -1263,18 +1403,62 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [region, load])
 
-  const handleSelectAll = useCallback(async (): Promise<void> => {
-    if (settingsScope === undefined || status === undefined) return
-    // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
-    // 会自动出现在用户面前，而不是被一次"全选"永久钉死在旧名单上。
+  /**
+   * 把草稿写回配置。
+   *
+   * 逐字段写、只写**与已保存值不同**的那些：少写一次是一次，配置文档里也不会
+   * 多出一堆与默认值相同的噪音条目。
+   */
+  const handleSaveDraft = useCallback(async (): Promise<void> => {
+    if (settingsScope === undefined || draft === undefined) return
+    const base = draftBase()
+    if (base === undefined) return
+    setBusy(true)
     try {
-      await writeModels(settingsScope, [])
+      // 1) 启用列表：空数组 = 目录全部（宿主语义），所以只有"用户全不选"才写空。
+      const savedIds = base.enabledIds
+      const sameIds = savedIds.length === draft.enabledIds.length
+        && savedIds.every(id => draft.enabledIds.includes(id))
+      if (!sameIds) {
+        // 全选 = 空列表，将来上游新增模型会自动出现。
+        await writeModels(settingsScope, draft.enabledIds.length === status?.catalog.length ? [] : draft.enabledIds)
+      }
+      // 2) 逐模型覆盖：只写变化过的。
+      for (const [id, value] of Object.entries(draft.images)) {
+        if (base.images[id] !== value) await writeModelImages(settingsScope, id, value)
+      }
+      for (const [id, value] of Object.entries(draft.thinkingOff)) {
+        if (base.thinkingOff[id] !== value) await writeModelThinkingOff(settingsScope, id, value)
+      }
+      for (const [id, value] of Object.entries(draft.contextWindows)) {
+        if (base.contextWindows[id] !== value) await writeModelContextWindow(settingsScope, id, value)
+      }
+      // 先把刚写下去的值记成基线，再清草稿：dirty 判定立刻就是干净的，
+      // 不用等宿主把新配置反映到 status 上。
+      setSavedBase(draft)
+      setDraft(undefined)
       setActionMessage(undefined)
       await afterWrite()
     } catch (caught: unknown) {
-      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+      // **草稿不清**：写入失败时用户的改动必须还在，否则改一次丢一次。
+      setActionMessage(translate('models.writeFailed'))
+    } finally {
+      setBusy(false)
     }
-  }, [settingsScope, status, afterWrite])
+  }, [settingsScope, draft, draftBase, status, afterWrite, translate])
+
+  /** 放弃修改：丢弃草稿，回到已保存的值。 */
+  const handleDiscardDraft = useCallback((): void => {
+    setDraft(undefined)
+    setActionMessage(undefined)
+  }, [])
+
+  const handleSelectAll = useCallback((): void => {
+    if (status === undefined) return
+    // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
+    // 会自动出现在用户面前，而不是被一次"全选"永久钉死在旧名单上。
+    editDraft(prev => ({ ...prev, enabledIds: status.catalog.map(model => model.id) }))
+  }, [status, editDraft])
 
   const handleClaim = useCallback(async (): Promise<void> => {
     setBusy(true)
@@ -1376,7 +1560,14 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   onModelContext={(id, window) => { void handleModelContext(id, window) }}
                   onModelImages={(id, wants) => { void handleModelImages(id, wants) }}
                   onThinkingOff={(id, allow) => { void handleThinkingOff(id, allow) }}
-                  onSelectAll={() => { void handleSelectAll() }}
+                  onSelectAll={() => { handleSelectAll() }}
+                  draftEnabledIds={draft?.enabledIds ?? status.models.map(model => model.id)}
+                  draftImages={draft?.images ?? {}}
+                  draftThinkingOff={draft?.thinkingOff ?? {}}
+                  draftContextWindows={draft?.contextWindows ?? {}}
+                  dirty={draftDirty}
+                  onSave={() => { void handleSaveDraft() }}
+                  onDiscard={() => { handleDiscardDraft() }}
                   onTest={id => { void handleTest(id) }}
                   onRefresh={() => { void handleRefresh() }}
                   busy={busy}

@@ -195,6 +195,16 @@ export interface MiniMaxRouteView {
   signin?: MiniMaxSigninView
 }
 
+/** 已保存的逐模型覆盖值（卡片草稿的基线）。 */
+export interface MiniMaxModelOverridesView {
+  /** 模型 id → 是否发送图片。 */
+  images: Record<string, boolean>
+  /** 模型 id → 是否提供「关闭思考」档。 */
+  thinkingOff: Record<string, boolean>
+  /** 模型 id → 上下文档位。 */
+  contextWindows: Record<string, number>
+}
+
 /** 状态路由的应答文档。 */
 export interface MiniMaxStatusView {
   ok: boolean
@@ -207,6 +217,13 @@ export interface MiniMaxStatusView {
   /** 每个区域一条：国内 `minimax`、国际 `minimax-global`。 */
   routes: MiniMaxRouteView[]
   models: MiniMaxModelView[]
+  /**
+   * 已保存的逐模型覆盖值。
+   *
+   * 卡片用它给草稿一个正确基线：`undefined` = 用户没动过，`false` = 显式关掉。
+   * 缺省时是空对象（旧版本宿主），卡片就退化成"每次改动立即写盘"。
+   */
+  modelOverrides: MiniMaxModelOverridesView
   /**
    * 完整目录（含未启用的模型）。
    *
@@ -308,6 +325,7 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
     routes,
     models,
     catalog,
+    modelOverrides: parseModelOverrides(raw['modelOverrides']),
     enabledRegions: Array.isArray(raw['enabledRegions'])
       ? raw['enabledRegions'].filter((item): item is string => item === 'cn' || item === 'global')
       // 没这个字段时从已注册路由反推，至少卡片上的开关不会全灭。
@@ -424,6 +442,34 @@ function contextWindowOptionsOfRow(row: Record<string, unknown>): number[] {
  * 解析不出任何账号时返回 `undefined`：旧版本宿主不返回这个字段，卡片那时按
  * "只有一个账号"处理，而不是显示一个空池子。
  */
+/** 解析"已保存的逐模型覆盖"段。 */
+function parseModelOverrides(value: unknown): MiniMaxModelOverridesView {
+  const row = (typeof value === 'object' && value !== null && !Array.isArray(value))
+    ? value as Record<string, unknown>
+    : {}
+  const booleanMap = (raw: unknown): Record<string, boolean> => {
+    const out: Record<string, boolean> = {}
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return out
+    for (const [key, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof entry === 'boolean') out[key] = entry
+    }
+    return out
+  }
+  const numberMap = (raw: unknown): Record<string, number> => {
+    const out: Record<string, number> = {}
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return out
+    for (const [key, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof entry === 'number' && Number.isFinite(entry)) out[key] = entry
+    }
+    return out
+  }
+  return {
+    images: booleanMap(row['images']),
+    thinkingOff: booleanMap(row['thinkingOff']),
+    contextWindows: numberMap(row['contextWindows']),
+  }
+}
+
 function parsePool(value: unknown): MiniMaxPoolView | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const row = value as Record<string, unknown>

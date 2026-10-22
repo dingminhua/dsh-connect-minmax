@@ -101,11 +101,15 @@ function recordingScope(payload: () => Record<string, unknown>): MiniMaxSettings
   writes: Array<{ field: string, value: unknown }>
 } {
   const writes: Array<{ field: string, value: unknown }> = []
+  // 真宿主是"写后回读得到新值"；这里必须模拟这一点，否则写入校验
+  // （writeField 写完回读比对）会失败，把草稿留在未保存状态。
+  const stored = new Map<string, unknown>()
   return {
     writes,
-    getSnapshot: () => ({ value: payload() }),
+    getSnapshot: () => ({ value: { ...payload(), ...Object.fromEntries(stored) } }),
     set: async (field, value) => {
       writes.push({ field, value })
+      stored.set(field, value)
       return true
     },
   }
@@ -178,7 +182,7 @@ async function settle(): Promise<void> {
 }
 
 describe('模型页勾选写入', () => {
-  it('关掉一个模型 → 写 models，且落盘的是目录顺序的补集', async () => {
+  it('关掉一个模型 → 先进草稿，点「保存」才写 models', async () => {
     let payload = statusPayload()
     mockRoutes({ status: () => payload })
     const scope = recordingScope(() => payload)
@@ -190,8 +194,33 @@ describe('模型页勾选写入', () => {
       boxes[0]?.click()
     })
     await settle()
+    // 改动先落在草稿里，**还没写盘**。
+    expect(scope.writes.find(entry => entry.field === 'models')).toBeUndefined()
+    // 标题旁出现"未保存"徽章，底部「保存」可用。
+    expect(container.innerHTML).toContain('models.dirty')
+    await clickText('.dsm-minimax-model-actions button', 'models.save')
+    await settle()
     const write = scope.writes.find(entry => entry.field === 'models')
+    // 落盘的是目录顺序的补集（不是勾选顺序）。
     expect(write?.value).toEqual(['MiniMax-M3', 'MiniMax-M2.7'])
+  })
+
+  it('「放弃修改」丢掉草稿，不写盘', async () => {
+    let payload = statusPayload()
+    mockRoutes({ status: () => payload })
+    const scope = recordingScope(() => payload)
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
+    await act(async () => { boxes[0]?.click() })
+    await settle()
+    await clickText('.dsm-minimax-model-actions button', 'models.discard')
+    await settle()
+    expect(scope.writes.find(entry => entry.field === 'models')).toBeUndefined()
+    const html = container.innerHTML
+    const at = html.indexOf('models.dirty')
+    if (at >= 0) console.log('DIRTY 出现位置:', html.slice(Math.max(0, at - 160), at + 60))
+    expect(html).not.toContain('models.dirty')
   })
 
   it('关到只剩最后一个时拒绝写入并给提示', async () => {
@@ -209,13 +238,17 @@ describe('模型页勾选写入', () => {
     expect(container.innerHTML).toContain('models.lastEnabled')
   })
 
-  it('「全部启用」写空列表（宿主语义：空 = 目录全部）', async () => {
+  it('「全部启用」保存时写空列表（宿主语义：空 = 目录全部）', async () => {
     let payload = statusPayload({ models: [CATALOG[0]] })
     mockRoutes({ status: () => payload })
     const scope = recordingScope(() => payload)
     await mount(scope)
     await clickText('.dsm-minimax-subtab', 'panel.models')
     await clickText('button', 'models.selectAll')
+    await settle()
+    // 草稿阶段还没写盘。
+    expect(scope.writes.find(entry => entry.field === 'models')).toBeUndefined()
+    await clickText('.dsm-minimax-model-actions button', 'models.save')
     await settle()
     expect(scope.writes.find(entry => entry.field === 'models')?.value).toEqual([])
   })
@@ -227,7 +260,7 @@ describe('模型页勾选写入', () => {
     expect(container.innerHTML).not.toContain('models.selectAll')
   })
 
-  it('上下文档位下拉：改档位写 modelContextWindows', async () => {
+  it('上下文档位下拉：改档位先进草稿，保存才写 modelContextWindows', async () => {
     let payload = statusPayload()
     mockRoutes({ status: () => payload })
     const scope = recordingScope(() => payload)
@@ -240,6 +273,9 @@ describe('模型页勾选写入', () => {
       setter?.call(select, '1000000')
       select?.dispatchEvent(new Event('change', { bubbles: true }))
     })
+    await settle()
+    expect(scope.writes.find(entry => entry.field === 'modelContextWindows')).toBeUndefined()
+    await clickText('.dsm-minimax-model-actions button', 'models.save')
     await settle()
     const write = scope.writes.find(entry => entry.field === 'modelContextWindows')
     expect(write?.value).toMatchObject({ 'MiniMax-M3.1-Flash': 1_000_000 })
@@ -490,5 +526,105 @@ describe('没有设置作用域时', () => {
     expect(boxes.length).toBeGreaterThan(0)
     expect(boxes.every(box => box.disabled)).toBe(true)
     expect(container.innerHTML).toContain('settings.readOnly')
+  })
+})
+
+describe('草稿的边界', () => {
+  it('关到只剩最后一个时拒绝，并给提示（草稿也不改）', async () => {
+    let payload = statusPayload({ models: [CATALOG[0]] })
+    mockRoutes({ status: () => payload })
+    const scope = recordingScope(() => payload)
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
+    await act(async () => { boxes[0]?.click() })
+    await settle()
+    expect(container.innerHTML).toContain('models.lastEnabled')
+    // 草稿没被改，所以没有 dirty，也没有写盘。
+    const html = container.innerHTML
+    const at = html.indexOf('models.dirty')
+    if (at >= 0) console.log('DIRTY 出现位置:', html.slice(Math.max(0, at - 160), at + 60))
+    expect(html).not.toContain('models.dirty')
+    expect(scope.writes.find(entry => entry.field === 'models')).toBeUndefined()
+  })
+
+  it('底部操作条有「鼓励一下」链接指向仓库', async () => {
+    mockRoutes({ status: () => statusPayload() })
+    await mount(recordingScope(() => statusPayload()))
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const link = container.querySelector<HTMLAnchorElement>('.dsm-minimax-cheer')
+    expect(link?.getAttribute('href')).toBe('https://github.com/dingminhua/dsh-connect-minmax')
+    expect(link?.textContent).toContain('models.cheer')
+  })
+
+  it('没有改动时「保存」是禁用的（点了也不该写）', async () => {
+    let payload = statusPayload()
+    mockRoutes({ status: () => payload })
+    const scope = recordingScope(() => payload)
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const save = Array.from(container.querySelectorAll<HTMLButtonElement>('.dsm-minimax-model-actions button'))
+      .find(button => button.textContent === 'models.save')
+    expect(save?.disabled).toBe(true)
+  })
+})
+
+describe('保存之后', () => {
+  it('写完盘草稿清空、dirty 徽章消失', async () => {
+    let payload = statusPayload()
+    mockRoutes({ status: () => payload })
+    const scope = recordingScope(() => payload)
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
+    await act(async () => { boxes[0]?.click() })
+    await settle()
+    expect(container.innerHTML).toContain('models.dirty')
+    await clickText('.dsm-minimax-model-actions button', 'models.save')
+    await settle()
+    const html = container.innerHTML
+    const at = html.indexOf('models.dirty')
+    if (at >= 0) console.log('DIRTY 出现位置:', html.slice(Math.max(0, at - 160), at + 60))
+    expect(html).not.toContain('models.dirty')
+  })
+
+  it('保存时只写变化过的字段（没动的不碰）', async () => {
+    let payload = statusPayload()
+    mockRoutes({ status: () => payload })
+    const scope = recordingScope(() => payload)
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
+    await act(async () => { boxes[0]?.click() })
+    await settle()
+    await clickText('.dsm-minimax-model-actions button', 'models.save')
+    await settle()
+    // 只动了启用列表：图片/思考/档位一个都不该被写。
+    expect(scope.writes.some(entry => entry.field === 'modelImages')).toBe(false)
+    expect(scope.writes.some(entry => entry.field === 'modelThinkingOff')).toBe(false)
+    expect(scope.writes.some(entry => entry.field === 'modelContextWindows')).toBe(false)
+  })
+})
+
+describe('写入失败时草稿不丢', () => {
+  it('设置面板拒绝写入 → 草稿保留、给出提示，用户可以再试', async () => {
+    const payload = statusPayload()
+    mockRoutes({ status: () => payload })
+    const writes: Array<{ field: string, value: unknown }> = []
+    const scope = {
+      writes,
+      getSnapshot: () => ({ value: payload }),
+      set: async () => false,
+    }
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.models')
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-model input[type=checkbox]'))
+    await act(async () => { boxes[0]?.click() })
+    await settle()
+    await clickText('.dsm-minimax-model-actions button', 'models.save')
+    await settle()
+    // 草稿还在（改动没丢），并给出了提示。
+    expect(container.innerHTML).toContain('models.dirty')
+    expect(container.innerHTML).toContain('models.writeFailed')
   })
 })
