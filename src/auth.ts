@@ -225,7 +225,7 @@ export class MiniMaxAuth {
         }
         this.lastError = this.isUsable(lease.expiresAtMs)
           ? // 不是"租约坏了"，而是"租约不属于这个区域"：说清楚，否则排查时会去怀疑 broker。
-            `MiniMax Code 的认证租约当前服务的是另一个区域的账号（generation ${lease.generation}，本区域 ${local?.generation ?? '未知'}），已改用本区域凭据。`
+            this.otherRegionNote(lease.generation, local)
           : 'MiniMax Code 返回的登录态即将过期。'
       } catch (error) {
         this.lastError = describeError(error)
@@ -250,12 +250,25 @@ export class MiniMaxAuth {
   /**
    * 探测登录态。**不抛异常**：所有失败都折算成 `state: 'error' | 'missing'`，
    * 因为它服务于状态卡片（探测本身不该 500）。
+   *
+   * 与 `token()` 用**同一套区域门控**，这一点是诊断页正确性的全部依据：
+   * `token()` 会拒绝不属于本区域的租约、改用本区域盘上凭据，如果这里无条件
+   * 转述 broker 状态，卡片就会显示 `source=lease` + 另一个区域的 generation，
+   * 而每一次真实请求走的都是 file ——显示与通路不一致，排查时第一反应会是
+   * "broker 坏了"，方向整个错掉。实测（本机双区域登录）：cn 路由盘上是
+   * generation 16，broker 正服务国际版的 12，旧 inspect 把 cn 报成
+   * `lease gen=12`，与 global 路由一字不差，两区域唯一的可见差异就没了。
    */
   async inspect(signal?: AbortSignal): Promise<MiniMaxLoginStatus> {
     try {
       if (await this.leaseClient.available()) {
         const status = await this.leaseClient.status(signal)
-        return this.fromBrokerStatus(status)
+        const local = await this.readFileCredential()
+        if (this.brokerServesThisRegion(status.generation, local)) {
+          return this.fromBrokerStatus(status)
+        }
+        // 租约属于另一个区域 → 报本区域自己的文件状态，并带上与 token() 相同的说明。
+        return this.fromFile(undefined, this.otherRegionNote(status.generation, local))
       }
     } catch (error) {
       // broker 在但会话不可用 → 继续看文件；记录原因供 detail 使用。
@@ -264,6 +277,14 @@ export class MiniMaxAuth {
       return fileStatus
     }
     return this.fromFile(undefined)
+  }
+
+  /** 「租约不属于本区域」的统一措辞；`token()` 与 `inspect()` 共用。 */
+  private otherRegionNote(
+    leaseGeneration: number,
+    local: FileCredential | undefined,
+  ): string {
+    return `MiniMax Code 的认证租约当前服务的是另一个区域的账号（generation ${leaseGeneration}，本区域 ${local?.generation ?? '未知'}），已改用本区域凭据。`
   }
 
   /** 清空缓存（401 后由 adapter 调用，下一次 `token()` 会重新 lease）。 */
@@ -320,16 +341,31 @@ export class MiniMaxAuth {
     return { ...base, state: 'error', detail: `MiniMax Code 登录态为 ${status.status}。` }
   }
 
-  /** 本地文件兜底探测；`brokerReason` 只在 broker 已尝试但失败时传入。 */
-  private async fromFile(brokerReason: string | undefined): Promise<MiniMaxLoginStatus> {
+  /**
+   * 本地文件兜底探测。
+   *
+   * 两个原因的**可见性规则不同**，所以分成两个参数：
+   *
+   *  - `brokerReason`：broker 试过但失败了。已经能用的凭据不该被它污染成告警，
+   *    因此只在「不可用」时补充。
+   *  - `regionNote`：租约属于另一个区域，本区域**正常**走盘上凭据。这是用户看到
+   *    `source=file` 时最需要的解释（"为什么没用租约"），ready 也必须带。
+   */
+  private async fromFile(
+    brokerReason: string | undefined,
+    regionNote?: string,
+  ): Promise<MiniMaxLoginStatus> {
     const state = this.readAuthStateSync()
     const credential = await this.readFileCredential()
     const region = this.region
-    const withBroker = (status: MiniMaxLoginStatus): MiniMaxLoginStatus =>
+    const withBroker = (status: MiniMaxLoginStatus): MiniMaxLoginStatus => {
+      if (status.detail !== undefined) return status
+      if (regionNote !== undefined) return { ...status, detail: regionNote }
       // 已经能用的凭据不该被 broker 的失败原因污染成告警；只在「不可用」时补充原因。
-      brokerReason === undefined || status.detail !== undefined || status.state === 'ready'
+      return brokerReason === undefined || status.state === 'ready'
         ? status
         : { ...status, detail: brokerReason }
+    }
 
     if (state === undefined && credential === undefined) {
       return withBroker({

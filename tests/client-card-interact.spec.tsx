@@ -367,6 +367,28 @@ describe('诊断页', () => {
     expect(panel?.querySelectorAll('input[type=checkbox], select').length).toBe(0)
   })
 
+  it('ready 但走了跨区回落时，诊断页仍显示这条事实', async () => {
+    // 真实机器形态：broker 服务国际版，cn 路由每次都用盘上凭据。显示成
+    // source=lease + 别区 generation 会把排查方向整个带错。
+    const payload = statusPayload({
+      routes: [
+        liveRoute({
+          login: {
+            state: 'ready', source: 'file', generation: 16,
+            expiresAtMs: Date.now() + 3_600_000,
+            detail: 'MiniMax Code 的认证租约当前服务的是另一个区域的账号（generation 12，本区域 16），已改用本区域凭据。',
+          },
+        }),
+      ],
+    })
+    mockRoutes({ status: () => payload })
+    await mount(recordingScope(() => payload))
+    await clickText('.dsm-minimax-subtab', 'panel.diagnostics')
+    const html = container.innerHTML
+    expect(html).toContain('diagnostics.credentialNote')
+    expect(html).toContain('另一个区域')
+  })
+
   it('「最近一次失败」在全就绪时显示"没有报错"', async () => {
     mockRoutes({ status: () => statusPayload() })
     await mount(recordingScope(() => statusPayload()))

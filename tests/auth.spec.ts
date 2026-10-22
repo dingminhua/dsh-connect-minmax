@@ -709,3 +709,49 @@ describe('设备码授权进行中（authorizing）', () => {
     }
   })
 })
+
+describe('MiniMaxAuth / inspect 的区域门控（诊断页与真实通路一致）', () => {
+  // token() 会拒绝不属于本区域的租约改用盘上凭据；inspect() 若还无条件转述
+  // broker，卡片就会显示 lease + 别区的 generation，而真实请求全走 file——
+  // 显示与通路不一致，排查方向整个错掉（实测本机双区域登录复现）。
+  it('broker 服务别区账号时 inspect 报 file，并带上同一句说明', async () => {
+    const dir = await tempDir()
+    const broker = await startBroker(dir, { accessToken: 'mmoat_other_region', generation: 11 })
+    track(dir, broker)
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file', generation: 15 })
+
+    const status = await new MiniMaxAuth({ dataDir: dir }).inspect()
+    expect(status.source).toBe('file')
+    expect(status.generation).toBe(15)
+    expect(status.state).toBe('ready')
+    // 与 token() 同措辞：两处说的必须是同一件事。
+    expect(status.detail).toContain('另一个区域')
+    expect(status.detail).toContain('generation 11')
+  })
+
+  it('generation 一致时 inspect 仍报 lease（同区不该被门控误伤）', async () => {
+    const dir = await tempDir()
+    const broker = await startBroker(dir, { accessToken: 'mmoat_from_lease', generation: 15 })
+    track(dir, broker)
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file', generation: 15 })
+
+    const status = await new MiniMaxAuth({ dataDir: dir }).inspect()
+    expect(status.source).toBe('lease')
+    expect(status.generation).toBe(15)
+    expect(status.detail).toBeUndefined()
+  })
+
+  it('ready 状态也带着回落说明——它是真事实，不是告警污染', async () => {
+    // fromFile 的 withBroker 不该把 ready 抹成无 detail；这条路径的"每次请求都在
+    // 回落"恰恰是用户最需要看见的信息。
+    const dir = await tempDir()
+    const broker = await startBroker(dir, { accessToken: 'mmoat_other_region', generation: 11 })
+    track(dir, broker)
+    await writeFixtures(dir, { accessToken: 'mmoat_from_file', generation: 15 })
+
+    const auth = new MiniMaxAuth({ dataDir: dir })
+    const status = await auth.inspect()
+    expect(status.state).toBe('ready')
+    expect(status.detail).toBeDefined()
+  })
+})

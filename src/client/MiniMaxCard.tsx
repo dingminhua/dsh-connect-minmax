@@ -1024,6 +1024,9 @@ function DiagnosticsPanel(props: {
         {live?.login.generation === undefined
           ? null
           : fact(t('login.generation'), String(live.login.generation))}
+        {live?.login.detail === undefined
+          ? null
+          : fact(t('diagnostics.credentialNote'), live.login.detail)}
         {fact(t('diagnostics.creditsAt'), creditsFactOf(live?.credits, status.checkedAt, t))}
         {fact(t('diagnostics.catalog'), String(status.catalog.length))}
         {fact(t('diagnostics.enabledModels'), String(status.models.length))}

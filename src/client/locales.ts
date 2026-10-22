@@ -148,6 +148,7 @@ export const en = {
   'settings.readOnly': 'This host does not expose a settings surface, so the card is read-only.',
   /* ---- 诊断页 ---- */
   'diagnostics.route': 'Provider route',
+  'diagnostics.credentialNote': 'Credential note',
   'diagnostics.enabledRegions': 'Enabled regions',
   'diagnostics.creditsAt': 'Credits read at',
   'diagnostics.catalog': 'Models in catalog',
@@ -303,6 +304,7 @@ export const zh: Record<MiniMaxSettingsKey, string> = {
   'settings.readOnly': '当前宿主没有提供设置写入面，这张卡片是只读的。',
   /* ---- 诊断页 ---- */
   'diagnostics.route': '供应商路由',
+  'diagnostics.credentialNote': '凭据说明',
   'diagnostics.enabledRegions': '已启用区域',
   'diagnostics.creditsAt': '积分读取于',
   'diagnostics.catalog': '目录中的模型',
