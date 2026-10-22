@@ -653,3 +653,30 @@ describe('写入失败时草稿不丢', () => {
     expect(container.innerHTML).toContain('models.writeFailed')
   })
 })
+
+describe('池复选框是持久化的参与开关', () => {
+  it('取消勾选 → 写 poolDisabled（不是临时勾选）', async () => {
+    const withPool = statusPayload({
+      routes: [liveRoute({
+        pool: {
+          active: 'live',
+          accounts: [
+            { id: 'live', label: '本机登录', live: true, active: true, rank: 1, participates: true },
+            { id: 'cn-x', label: '副本 1', live: false, active: false, rank: 2, participates: true },
+          ],
+        },
+      })],
+    })
+    mockRoutes({ status: () => withPool })
+    const scope = recordingScope(() => withPool)
+    await mount(scope)
+    await clickText('.dsm-minimax-subtab', 'panel.account')
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('.dsm-minimax-pool-pick input'))
+    expect(boxes).toHaveLength(2)
+    await act(async () => { boxes[1]?.click() })
+    await settle()
+    const write = scope.writes.find(entry => entry.field === 'poolDisabled')
+    // 取消第二个 → 它进禁用列表。
+    expect(write?.value).toEqual(['cn-x'])
+  })
+})

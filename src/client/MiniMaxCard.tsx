@@ -75,6 +75,7 @@ import {
   writeModelImages,
   writeModelThinkingOff,
   writeModels,
+  writePoolDisabled,
   writeReasoningEffort,
   writeRegions,
 } from './settings.ts'
@@ -699,9 +700,19 @@ function PoolTable(props: {
   onTest(route: string): void
   onClaim(ids: readonly string[]): void
   onMove(id: string, direction: 'up' | 'down'): void
+  /** 写入"不参与换号/批量动作"的账号 id 列表（复选框是持久化开关）。 */
+  onParticipate(ids: readonly string[]): void
 }): ReactElement {
-  const { pool, routes, region, nowMs, busy, t, onSelectAccount, onDelete, onTest, onClaim, onMove } = props
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(pool.accounts.map(entry => entry.id)))
+  const {
+    pool, routes, region, nowMs, busy, t,
+    onSelectAccount, onDelete, onTest, onClaim, onMove, onParticipate,
+  } = props
+  /**
+   * 复选框 = **参与开关**（持久化），不是临时勾选：workbuddy 表头那句
+   * "只有勾选的账号参与轮换、签到与测试"就是这个语义。批量动作与导出都
+   * 跟着勾选走，所以不需要第二套选择状态。
+   */
+  const participating = new Set(pool.accounts.filter(entry => entry.participates !== false).map(entry => entry.id))
   const [transfer, setTransfer] = useState<{
     phase: 'idle' | 'preview' | 'busy'
     preview?: MiniMaxTransferPreviewEntryView[]
@@ -715,15 +726,13 @@ function PoolTable(props: {
   const routeOf = (entry: MiniMaxPoolEntryView): MiniMaxRouteView | undefined =>
     routes.find(route => (entry.live ? !isCopyRoute(route) : route.accountId === entry.id))
 
-  const toggle = (id: string): void => {
-    setSelected(previous => {
-      const next = new Set(previous)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const selectedIds = pool.accounts.filter(entry => participating.has(entry.id)).map(entry => entry.id)
+  const toggle = (id: string, on: boolean): void => {
+    const next = new Set(participating)
+    if (on) next.add(id)
+    else next.delete(id)
+    onParticipate(pool.accounts.filter(entry => next.has(entry.id)).map(entry => entry.id))
   }
-  const selectedIds = pool.accounts.filter(entry => selected.has(entry.id)).map(entry => entry.id)
 
   const doExport = async (): Promise<void> => {
     setTransfer(state => ({ ...state, phase: 'busy' }))
@@ -790,7 +799,7 @@ function PoolTable(props: {
                 type="button"
                 className="dsm-minimax-btn dsm-minimax-btn-ghost"
                 disabled={busy}
-                onClick={() => { setSelected(new Set(pool.accounts.map(entry => entry.id))) }}
+                onClick={() => { onParticipate(pool.accounts.map(entry => entry.id)) }}
               >
                 {t('pool.selectAll')}
               </button>
@@ -798,7 +807,7 @@ function PoolTable(props: {
                 type="button"
                 className="dsm-minimax-btn dsm-minimax-btn-ghost"
                 disabled={busy}
-                onClick={() => { setSelected(new Set()) }}
+                onClick={() => { onParticipate([]) }}
               >
                 {t('pool.selectNone')}
               </button>
@@ -851,9 +860,9 @@ function PoolTable(props: {
                       <label className="dsm-minimax-pool-pick">
                         <input
                           type="checkbox"
-                          checked={selected.has(entry.id)}
+                          checked={participating.has(entry.id)}
                           disabled={busy}
-                          onChange={() => { toggle(entry.id) }}
+                          onChange={event => { toggle(entry.id, (event.target as HTMLInputElement).checked) }}
                         />
                       </label>
                       <span className="dsm-minimax-pool-rank">{t('pool.rank', { rank: entry.rank })}</span>
@@ -1040,11 +1049,12 @@ function AccountPanel(props: {
   onTestRoute(route: string): void
   onClaimAccounts(ids: readonly string[]): void
   onMoveAccount(id: string, direction: 'up' | 'down'): void
+  onParticipate(ids: readonly string[]): void
   t: MiniMaxTranslate
 }): ReactElement {
   const {
     status, region, nowMs, busy, message,
-    onClaim, onDelete, onSelectAccount, onTestRoute, onClaimAccounts, onMoveAccount, t,
+    onClaim, onDelete, onSelectAccount, onTestRoute, onClaimAccounts, onMoveAccount, onParticipate, t,
   } = props
   const routes = routesForRegion(effectiveRoutesOf(status), region)
   const live = routes.find(route => !isCopyRoute(route))
@@ -1075,6 +1085,7 @@ function AccountPanel(props: {
           onTest={route => onTestRoute(route)}
           onClaim={ids => onClaimAccounts(ids)}
           onMove={(id, dir) => onMoveAccount(id, dir)}
+          onParticipate={ids => onParticipate(ids)}
         />
       )}
 
@@ -1840,6 +1851,24 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     setBusy(false)
   }, [region, load])
 
+  /** 写入"不参与换号/批量动作"的账号列表（复选框是持久化开关）。 */
+  const handleParticipate = useCallback(async (ids: readonly string[]): Promise<void> => {
+    if (settingsScope === undefined) return
+    // 池在**路由级**（每个区域一条），取当前区域 live 路由的那份。
+    const routes = status === undefined ? [] : routesForRegion(effectiveRoutesOf(status), region)
+    const pool = routes.find(route => !isCopyRoute(route))?.pool
+    const disabled = (pool?.accounts ?? [])
+      .filter(entry => !ids.includes(entry.id))
+      .map(entry => entry.id)
+    try {
+      await writePoolDisabled(settingsScope, disabled)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, status, region, afterWrite])
+
   /** 调整池里副本的优先级。 */
   const handleMoveAccount = useCallback(async (id: string, direction: 'up' | 'down'): Promise<void> => {
     const outcome = await postAction(MINIMAX_ACCOUNT_MOVE_PATH, { region, id, direction })
@@ -1939,6 +1968,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                 onTestRoute={route => { void handleTestRoute(route) }}
                 onClaimAccounts={ids => { void handleClaimAccounts(ids) }}
                 onMoveAccount={(id, dir) => { void handleMoveAccount(id, dir) }}
+                onParticipate={ids => { void handleParticipate(ids) }}
                 t={translate}
               />
             )

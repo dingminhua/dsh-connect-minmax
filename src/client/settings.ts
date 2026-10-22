@@ -45,7 +45,7 @@ import { MINIMAX_SETTINGS_SAVE_PATH } from '../status-paths.ts'
 
 export type MiniMaxWritableField
   = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages'
-    | 'modelThinkingOff' | 'reasoningEffort' | 'modelContextWindows'
+    | 'modelThinkingOff' | 'reasoningEffort' | 'poolDisabled' | 'modelContextWindows'
 
 /** 写入没落地的错误。 */
 export class MiniMaxSettingsWriteError extends Error {
@@ -214,6 +214,16 @@ export function writeModelImages(
   return writeFlag(scope, 'modelImages', modelId, enabled)
 }
 
+/**
+ * 写入"不参与自动换号/批量动作"的账号 id 列表。
+ *
+ * 卡片上的复选框是**参与开关**：勾 = 参与，取消 = 进 poolDisabled。整份列表
+ * 一次写（列表本身不大），避免逐 id 写产生中间态。
+ */
+export function writePoolDisabled(scope: MiniMaxSettingsScope, ids: readonly string[]): Promise<void> {
+  return writeField(scope, 'poolDisabled', [...ids], sameList)
+}
+
 /** 写入某个模型的「提供关闭思考档」开关（只能关，见 catalog 的 withModelThinkingOff）。 */
 export function writeModelThinkingOff(
   scope: MiniMaxSettingsScope,
@@ -226,7 +236,7 @@ export function writeModelThinkingOff(
 /** 写入一个"模型 id → 数值/布尔"映射里的单项。 */
 function writeFlag<T extends number | boolean>(
   scope: MiniMaxSettingsScope,
-  field: 'modelContextWindows' | 'modelImages' | 'modelThinkingOff',
+  field: 'modelContextWindows' | 'modelImages' | 'modelThinkingOff' | 'poolDisabled',
   modelId: string,
   value: T,
 ): Promise<void> {
