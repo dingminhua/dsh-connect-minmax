@@ -66,8 +66,18 @@ import {
   writeModelContextWindow,
   writeModelImages,
   writeModels,
+  writeReasoningEffort,
   writeRegions,
 } from './settings.ts'
+
+/**
+ * 可选的思考档位。
+ *
+ * 与宿主侧 `MINIMAX_REASONING_EFFORTS` 一致；**不含 `off`**，因为
+ * `MiniMax-M3.1-Flash` 强制思考，把 `off` 设成 provider 级默认值会让宿主在
+ * 选中它时直接失败。
+ */
+export const MINIMAX_REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** 轮询间隔（毫秒）。 */
 export const MINIMAX_POLL_INTERVAL_MS = 10_000
@@ -791,6 +801,8 @@ function ModelPanel(props: {
   onToggleModel(modelId: string, enabled: boolean): void
   onModelContext(modelId: string, window: number): void
   onModelImages(modelId: string, enabled: boolean): void
+  onReasoningEffort(effort: string): void
+  effortOptions: readonly string[]
   onSelectAll(): void
   onTest(modelId: string): void
   onLongContext(enabled: boolean): void
@@ -799,7 +811,8 @@ function ModelPanel(props: {
   t: MiniMaxTranslate
 }): ReactElement {
   const {
-    status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onSelectAll, onTest, onLongContext, busy, message, t,
+    status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onReasoningEffort,
+    effortOptions, onSelectAll, onTest, onLongContext, busy, message, t,
   } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
@@ -828,6 +841,22 @@ function ModelPanel(props: {
             />
             {t('models.longContext')}
           </label>
+          {effortOptions.length > 0 && (
+            <label className="dsm-minimax-inline-check" title={canWrite ? t('models.effortHint') : t('settings.readOnly')}>
+              {t('models.effort')}
+              <select
+                value={status.reasoningEffort}
+                disabled={!canWrite || busy}
+                onChange={event => {
+                  onReasoningEffort((event.target as HTMLSelectElement).value)
+                }}
+              >
+                {effortOptions.map(option => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {!allChecked && (
             <button
               type="button"
@@ -1152,6 +1181,17 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [settingsScope, afterWrite])
 
+  const handleReasoningEffort = useCallback(async (effort: string): Promise<void> => {
+    if (settingsScope === undefined) return
+    try {
+      await writeReasoningEffort(settingsScope, effort)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, afterWrite])
+
   const handleSelectAll = useCallback(async (): Promise<void> => {
     if (settingsScope === undefined || status === undefined) return
     // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
@@ -1274,6 +1314,8 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   onToggleModel={(id, enabled) => { void handleToggleModel(id, enabled) }}
                   onModelContext={(id, window) => { void handleModelContext(id, window) }}
                   onModelImages={(id, wants) => { void handleModelImages(id, wants) }}
+                  onReasoningEffort={effort => { void handleReasoningEffort(effort) }}
+                  effortOptions={MINIMAX_REASONING_EFFORT_OPTIONS}
                   onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
                   onLongContext={enabled => { void handleLongContext(enabled) }}

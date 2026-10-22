@@ -127,6 +127,7 @@ sign-in and does not impersonate the official client.
 | `baseUrl` | empty | override the **domestic (CN)** hosted base URL (no trailing `/v1`; the SDK appends `/v1/messages`) |
 | `globalBaseUrl` | empty | override the **international (Global)** hosted base URL (same rule) |
 | `longContext` | `false` | use the 1M context tier (`M3` / `M3.1-Flash`); upstream bills it as higher usage |
+| `reasoningEffort` | `medium` | thinking level used when the session names none. **Provider-wide**: pi-ai's model-level description carries only the *set* of selectable efforts, never a per-model default, so a per-model default cannot be expressed plugin-side. `off` is **not offered** — `MiniMax-M3.1-Flash` forces thinking, and defaulting to `off` would make the harness fail the moment it is selected |
 | `modelImages` | `{}` | **per-model** image-input toggle (id → send images or not). Only turning off a supported modality takes effect; enabling one upstream does not support is ignored with a warning |
 | `modelContextWindows` | `{}` | **per-model** context tier (id → window), overriding `longContext`. Only tiers the model actually offers are accepted; anything else is ignored with a warning — a window upstream does not honour would make the harness compress context against the wrong number |
 

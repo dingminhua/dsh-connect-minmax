@@ -139,8 +139,11 @@ export interface MiniMaxModelSpec {
    *  - 缺失：五个基础档视为支持，`xhigh` / `max` 视为不支持
    */
   thinkingLevelMap?: Readonly<Record<string, string | null>>
-  /** 宿主未显式配置 effort 时建议的默认档位。 */
-  defaultEffort?: string
+  // 这里**没有** `defaultEffort`：曾经声明过 5 次，但没有任何地方读它。
+  // 实测（把目录里 M3 的 defaultEffort 改成 xhigh）`resolveModel()` 仍回 medium，
+  // 因为默认档位来自 provider 级的 `profile.reasoning`，而 pi-ai 的模型级只有
+  // `reasoningEfforts`（**可选档位集合**），没有"这一模型的默认档"这个概念。
+  // 声明一个没人读、看起来却像"每模型默认档"的字段，比没有这个字段更糟。
   /** 思考形态：`switchable` 可关，`forced` 关不掉（卡片展示用）。 */
   thinkingMode: 'switchable' | 'forced'
 }
@@ -160,7 +163,6 @@ export const MINIMAX_M3_1_FLASH_PREVIEW: MiniMaxModelSpec = {
   input: ['text', 'image'],
   reasoning: true,
   thinkingLevelMap: { ...MINIMAX_EFFORT_LEVELS, off: null },
-  defaultEffort: 'medium',
   thinkingMode: 'forced',
 }
 
@@ -185,7 +187,6 @@ export const MINIMAX_MODELS: readonly MiniMaxModelSpec[] = [
     input: ['text', 'image'],
     reasoning: true,
     thinkingLevelMap: FORCED,
-    defaultEffort: 'medium',
     thinkingMode: 'forced',
   },
   {
@@ -198,7 +199,6 @@ export const MINIMAX_MODELS: readonly MiniMaxModelSpec[] = [
     input: ['text', 'image'],
     reasoning: true,
     thinkingLevelMap: SWITCHABLE,
-    defaultEffort: 'medium',
     thinkingMode: 'switchable',
   },
   {
@@ -210,7 +210,6 @@ export const MINIMAX_MODELS: readonly MiniMaxModelSpec[] = [
     input: ['text', 'image'],
     reasoning: true,
     thinkingLevelMap: SWITCHABLE,
-    defaultEffort: 'medium',
     thinkingMode: 'switchable',
   },
   {
@@ -222,7 +221,6 @@ export const MINIMAX_MODELS: readonly MiniMaxModelSpec[] = [
     input: ['text', 'image'],
     reasoning: true,
     thinkingLevelMap: FORCED,
-    defaultEffort: 'medium',
     thinkingMode: 'forced',
   },
 ]

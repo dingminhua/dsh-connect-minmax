@@ -72,15 +72,45 @@ const REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
 const REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 
 /**
- * 默认思考档位。
- *
  * 宿主未显式请求档位时，`llm-pi-ai` 会退回 `profile.reasoning`
- * （`adapter.ts:348-352` 的 `options.reasoningEffort ?? profile.reasoning`）。
- * 这里必须给一个有效档位：`MiniMax-M3.1-Flash` 是强制思考模型，落到
- * "不发 thinking / 发 disabled" 的路径会被上游 400。`medium` 在本目录的
- * 每个模型上都存在（`thinkingLevelMap` 覆盖 low/medium/high/xhigh/max）。
+ * （`adapter.ts` 的 `options.reasoningEffort ?? profile.reasoning`），所以这里
+ * 必须给一个**每个模型都有效**的档位：`medium` 在本目录每个模型的
+ * `thinkingLevelMap` 里都存在。
  */
-const DEFAULT_REASONING_EFFORT = 'medium'
+/**
+ * 可配的默认思考档位取值。
+ *
+ * **不含 `off`**：`MiniMax-M3.1-Flash` 是强制思考模型，把 `off` 设成 provider 级
+ * 默认值会让宿主在选中它时直接失败。
+ */
+export const MINIMAX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** 上面那个联合的类型。 */
+export type MiniMaxReasoningEffort = typeof MINIMAX_REASONING_EFFORTS[number]
+
+/** 配置缺省时使用的档位。 */
+export const DEFAULT_REASONING_EFFORT: MiniMaxReasoningEffort = 'medium'
+
+/**
+ * 把配置里的思考档位收成有效值。
+ *
+ * 非法取值退回默认档并 warn：provider 拿到一个上游不认的档位，比配置写错一行
+ * 难查得多——症状是"选了某个模型就报错"，而不是"你的配置有问题"。
+ */
+export function resolveReasoningEffort(
+  configured: string | undefined,
+  warn: (message: string) => void,
+): MiniMaxReasoningEffort {
+  if (configured === undefined || configured === '') return DEFAULT_REASONING_EFFORT
+  if ((MINIMAX_REASONING_EFFORTS as readonly string[]).includes(configured)) {
+    return configured as MiniMaxReasoningEffort
+  }
+  warn(
+    `思考档位 "${configured}" 无效（可用：${MINIMAX_REASONING_EFFORTS.join(' / ')}），`
+    + `已用 ${DEFAULT_REASONING_EFFORT}。`,
+  )
+  return DEFAULT_REASONING_EFFORT
+}
 
 /** 插件配置。 */
 export interface MiniMaxConfig {
@@ -109,6 +139,7 @@ export interface MiniMaxConfig {
   longContext?: boolean
   modelContextWindows?: Record<string, number>
   modelImages?: Record<string, boolean>
+  reasoningEffort?: string
 }
 
 /** 配置 schema：值经过 schemastery 校验/补默认后才进 `apply()`。 */
@@ -140,6 +171,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .dict(z.number().step(1).min(1))
     .default({})
     .description('逐模型上下文档位（id → 窗口）；只接受该模型确实提供的档位，其余忽略。'),
+  reasoningEffort: z
+    .union(MINIMAX_REASONING_EFFORTS.map(level => z.const(level)))
+    .default('medium')
+    .description('宿主未指定档位时的默认思考强度（provider 级：pi-ai 没有"每模型默认档"这个概念）。'),
   modelImages: z
     .dict(z.boolean())
     .default({})
@@ -252,6 +287,14 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   const requestedRegions = normalizeRegions(config.regions, warn)
   const longContext = config.longContext ?? false
+  /**
+   * 默认思考档位。
+   *
+   * 必须是本目录里**每个模型都有**的档位：`MiniMax-M3.1-Flash` 强制思考，拿到
+   * 一个它没有的档位会让宿主在选它时直接失败，所以 `off` 不在可选项里。
+   * 非法取值退回默认档并 warn——provider 拿到一个无效值比配置写错更难查。
+   */
+  const reasoningEffort = resolveReasoningEffort(config.reasoningEffort, warn)
   const models = selectModels(config.models, warn).map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, warn))
 
   /** 每个区域一条路由；装配方式完全相同，只有凭据面与 baseUrl 不同。 */
@@ -305,7 +348,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       provider: route,
       displayName,
       // 宿主未指定档位时的默认值，见 DEFAULT_REASONING_EFFORT 的说明。
-      reasoning: DEFAULT_REASONING_EFFORT,
+      reasoning: reasoningEffort,
       streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
       retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-minmax retryPolicy'),
       // 目录里的 maxTokens 只用于 sizing，不能当请求默认输出上限。
@@ -535,6 +578,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       catalog: MINIMAX_MODELS.map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, warn)),
       enabledRegions: requestedRegions,
       longContext,
+      reasoningEffort,
       version: PLUGIN_VERSION,
     })
     registerActions(context)

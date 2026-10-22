@@ -233,6 +233,7 @@ describe('effectiveRoutesOf', () => {
     catalog: [],
     enabledRegions: ['cn', 'global'],
     longContext: false,
+    reasoningEffort: 'medium',
     pluginVersion: '0.1.0',
     checkedAt: 0,
   }
@@ -461,6 +462,7 @@ function statusOf(options: {
     catalog: options.catalog.map(model),
     enabledRegions: options.regions ?? ['cn', 'global'],
     longContext: false,
+    reasoningEffort: 'medium',
     pluginVersion: '0.1.0',
     checkedAt: 0,
   }

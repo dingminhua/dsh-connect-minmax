@@ -165,6 +165,8 @@ export interface MiniMaxStatusView {
   enabledRegions: string[]
   /** 1M 长上下文档。 */
   longContext: boolean
+  /** provider 级默认思考档位；旧版本应答没有时按 `medium` 处理。 */
+  reasoningEffort: string
   pluginVersion: string
   checkedAt: number
 }
@@ -257,6 +259,7 @@ export function toStatusView(value: unknown): MiniMaxStatusView {
       // 没这个字段时从已注册路由反推，至少卡片上的开关不会全灭。
       : [...new Set(routes.map(route => route.region))],
     longContext: raw['longContext'] === true,
+    reasoningEffort: stringOf(raw['reasoningEffort']) ?? 'medium',
     pluginVersion: stringOf(raw['pluginVersion']) ?? 'dev',
     checkedAt: finiteNumberOf(raw['checkedAt']) ?? 0,
   }

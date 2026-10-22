@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import { MiniMaxAdapter, PROVIDER_DISPLAY_NAME } from '../src/adapter.ts'
 import { MINIMAX_MODELS, ROUTE, findModelSpec, regionBaseUrl } from '../src/catalog.ts'
-import { apply, Config, effectiveBaseUrl, normalizeRegions, projectModel, selectModels } from '../src/index.ts'
+import { apply, Config, effectiveBaseUrl, MINIMAX_REASONING_EFFORTS, normalizeRegions, projectModel, resolveReasoningEffort, selectModels } from '../src/index.ts'
 import { PLUGIN_VERSION } from '../src/version.ts'
 
 /**
@@ -307,5 +307,33 @@ describe('projectModel（逐模型上下文档位）', () => {
     const m3 = projectModel(specOf('MiniMax-M3'), false, { 'MiniMax-M3.1-Flash': 1_000_000 }, {}, m => warned.push(m))
     expect(m3.contextWindow).toBe(512_000)
     expect(warned).toEqual([])
+  })
+})
+
+describe('resolveReasoningEffort', () => {
+  it('缺省与空值都用 medium', () => {
+    const warned: string[] = []
+    expect(resolveReasoningEffort(undefined, m => warned.push(m))).toBe('medium')
+    expect(resolveReasoningEffort('', m => warned.push(m))).toBe('medium')
+    expect(warned).toEqual([])
+  })
+
+  it('有效档位原样通过', () => {
+    for (const level of MINIMAX_REASONING_EFFORTS) {
+      expect(resolveReasoningEffort(level, () => undefined)).toBe(level)
+    }
+  })
+
+  it('off 不是合法默认值：M3.1-Flash 强制思考，设成 off 会让宿主选中它即失败', () => {
+    expect(MINIMAX_REASONING_EFFORTS).not.toContain('off')
+    const warned: string[] = []
+    expect(resolveReasoningEffort('off', m => warned.push(m))).toBe('medium')
+    expect(warned.join(' ')).toContain('off')
+  })
+
+  it('非法档位退回默认并 warn（provider 拿到无效值比配置写错一行难查）', () => {
+    const warned: string[] = []
+    expect(resolveReasoningEffort('turbo', m => warned.push(m))).toBe('medium')
+    expect(warned.join(' ')).toContain('turbo')
   })
 })

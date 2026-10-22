@@ -42,7 +42,7 @@ export interface MiniMaxSettingsScope {
 
 /** 卡片可写的字段名。 */
 export type MiniMaxWritableField
-  = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages' | 'modelContextWindows'
+  = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages' | 'reasoningEffort' | 'modelContextWindows'
 
 /** 写入没落地的错误。 */
 export class MiniMaxSettingsWriteError extends Error {
@@ -162,6 +162,16 @@ function writeFlag<T extends number | boolean>(
     return keys.length === Object.keys(readBack).length
       && keys.every(key => readBack[key] === wanted[key])
   })
+}
+
+/**
+ * 写入默认思考档位（provider 级）。
+ *
+ * 只有这一层可配：pi-ai 的模型级描述里只有 `reasoningEfforts`（**可选档位集合**），
+ * 没有"这个模型的默认档"这个概念，所以逐模型的默认强度在插件侧无法表达。
+ */
+export function writeReasoningEffort(scope: MiniMaxSettingsScope, effort: string): Promise<void> {
+  return writeField(scope, 'reasoningEffort', effort, (expected, actual) => actual === expected)
 }
 
 /** 写入长上下文档开关。 */

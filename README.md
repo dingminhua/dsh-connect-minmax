@@ -169,6 +169,7 @@ MiniMax Code 每个区域只能留一个登录账号（国内 + 国际各一个�
 | `baseUrl` | 空 | 覆盖**国内版**托管 base URL（**不要**带 `/v1`，SDK 会自己拼 `/v1/messages`） |
 | `globalBaseUrl` | 空 | 覆盖**国际版**托管 base URL（规则同上） |
 | `longContext` | `false` | 用 1M 上下文档（仅 `M3` / `M3.1-Flash`）；上游按更高用量计费 |
+| `reasoningEffort` | `medium` | 会话没显式选档位时的默认思考强度。**provider 级**：pi-ai 的模型级描述里只有"可选档位集合"，没有"每模型默认档"这个概念。**不提供 `off`**——`MiniMax-M3.1-Flash` 强制思考，默认值设成 `off` 会让宿主在选中它时直接失败 |
 | `modelImages` | `{}` | **逐模型**图片输入开关（id → 是否发图）。只允许关掉上游支持的模型；开启一个上游不支持的会被忽略并 warn |
 | `modelContextWindows` | `{}` | **逐模型**上下文档位（id → 窗口），覆盖 `longContext` 的结果。只接受该模型确实提供的档位，其余忽略并 warn——写一个上游不受理的值会让宿主按错误的窗口做上下文压缩 |
 

@@ -145,6 +145,8 @@ export interface MiniMaxStatusPayload {
   enabledRegions?: string[]
   /** 是否启用 1M 长上下文档。 */
   longContext?: boolean
+  /** provider 级默认思考档位（宿主未指定档位时用）。 */
+  reasoningEffort?: string
   pluginVersion: string
   /** 本次探测的时间戳（epoch ms）。 */
   checkedAt: number
@@ -230,6 +232,8 @@ export interface MiniMaxStatusDeps {
   enabledRegions?: readonly string[]
   /** 长上下文档位。 */
   longContext?: boolean
+  /** 默认思考档位。 */
+  reasoningEffort?: string
   version: string
 }
 
@@ -498,6 +502,7 @@ export async function buildMiniMaxStatus(
     ...deps.catalog === undefined ? {} : { catalog: toStatusModels(deps.catalog) },
     ...deps.enabledRegions === undefined ? {} : { enabledRegions: [...deps.enabledRegions] },
     ...deps.longContext === undefined ? {} : { longContext: deps.longContext },
+    ...deps.reasoningEffort === undefined ? {} : { reasoningEffort: deps.reasoningEffort },
     pluginVersion: deps.version,
     checkedAt: nowMs,
   }
@@ -555,6 +560,7 @@ export function registerMiniMaxStatusRoute(
           ...deps.catalog === undefined ? {} : { catalog: toStatusModels(deps.catalog) },
           ...deps.enabledRegions === undefined ? {} : { enabledRegions: [...deps.enabledRegions] },
           ...deps.longContext === undefined ? {} : { longContext: deps.longContext },
+          ...deps.reasoningEffort === undefined ? {} : { reasoningEffort: deps.reasoningEffort },
           pluginVersion: deps.version,
           checkedAt: Date.now(),
         } satisfies MiniMaxStatusPayload)

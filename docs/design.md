@@ -266,3 +266,26 @@ lease (broker, generation 11 = en 的) → gateway 401 · account 401
 回归测试在 `tests/auth.spec.ts`（4 条，已验证：去掉修复即红）。假 broker 与盘上 fixture 的
 `generation` 默认值都是 2，所以**跨区场景在加这 4 条之前完全没有覆盖**——这也是这个 bug
 能活到 0.5.0 的原因。
+
+
+## 11. 默认思考档位为什么是 provider 级（0.5.0）
+
+目录里曾经给每个模型声明 `defaultEffort: 'medium'`，看上去像"每模型一个默认档"。
+**它从来没被读过**：把 `MiniMax-M3` 的该字段改成 `xhigh` 后重新构建，
+`resolveModel('minimax','MiniMax-M3').reasoning.defaultEffort` 仍然是 `medium`。
+
+真实来源是 `llm-pi-ai` 的 `options.reasoningEffort ?? profile.reasoning` —— 后者是
+**provider 级的单个值**。而 pi-ai 的模型级描述（`PiAiModelProfile`）只有
+`reasoningEfforts?: false | Partial<Record<ModelThinkingLevel, string | null>>`，
+即"这个模型**可以选**哪些档"，没有"这个模型**默认**哪档"。
+
+所以：
+
+- 删掉 `MiniMaxModelSpec.defaultEffort`（声明 5 次、读取 0 次的死字段，比没有更糟：
+  它会让后来人以为改它能生效）。
+- 把默认档位提成真实配置 `reasoningEffort`（provider 级），卡片上是一个下拉框。
+- 可选值**不含 `off`**：`MiniMax-M3.1-Flash` 强制思考，默认值设成 `off` 会让宿主
+  在选中该模型时直接失败。非法取值退回 `medium` 并 warn。
+
+实测：`{reasoningEffort:'high'}` → `defaultEffort=high`；`{reasoningEffort:'off'}` →
+`medium` 并 warn「思考档位 "off" 无效」。

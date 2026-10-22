@@ -37,6 +37,14 @@
 - 卡片写配置（`models` / `regions` / `longContext`）并**回读校验**：`scope.set()` 返回
   `false` 是「被拒」而不是「抛错」，不校验就会出现「复选框打上勾、配置纹丝不动」的假成功。
 
+- 新配置字段 `reasoningEffort`（provider 级默认思考档位）：卡片上是一个下拉框，非法取值
+  退回 `medium` 并 warn。**不提供 `off`**——`MiniMax-M3.1-Flash` 强制思考，默认值设成
+  `off` 会让宿主在选中它时直接失败。
+- 删除 `MiniMaxModelSpec.defaultEffort`：声明了 5 次、**读取 0 次**的死字段。实测把某模型
+  的该值改成 `xhigh` 后 `resolveModel()` 仍回 `medium`（默认档位来自 provider 级的
+  `profile.reasoning`，pi-ai 的模型级只有"可选档位集合"）。留着它比没有更糟：后来人会
+  以为改它能生效。
+
 ### 刻意不做
 
 - 逐模型的「支持图片」「可关思考」开关：那是上游决定的**事实**（M2.7 就是不能输入图片），
