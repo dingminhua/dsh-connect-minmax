@@ -119,6 +119,31 @@ async function mount(): Promise<void> {
   })
 }
 
+/**
+ * 「路由」表。
+ *
+ * 按**表头**识别而不是按 DOM 顺序：卡片里有两张 class 完全相同的表（路由表
+ * 与模型表），靠下标取会在有人调换区块顺序时静默测到另一张表。
+ */
+function routesTable(): HTMLTableElement | undefined {
+  return Array.from(container.querySelectorAll('table'))
+    .find(table => (table.querySelector('th')?.textContent ?? '').includes('routes.provider'))
+}
+
+/** 路由表里一行的单元格文本（0=供应商 1=区域 2=登录态 3=到期）。 */
+function rowCellsOf(route: string): string[] {
+  const rows = Array.from(routesTable()?.querySelectorAll('tbody tr') ?? [])
+  const row = rows.find(candidate => (candidate.querySelector('td')?.textContent ?? '').includes(route))
+  expect(row, `路由表里应当有一行 ${route}`).toBeDefined()
+  return Array.from(row?.querySelectorAll('td') ?? []).map(cell => cell.textContent ?? '')
+}
+
+/** 「路由」表下方那句副本说明（小字 hint）。 */
+function copyHintText(): string {
+  const hint = routesTable()?.parentElement?.querySelector('p.dsm-minimax-hint')
+  return hint?.textContent ?? ''
+}
+
 /** 让 fetch 回一份指定文档。 */
 function mockFetch(body: unknown, ok = true, status = 200): void {
   vi.stubGlobal('fetch', vi.fn(async () => ({

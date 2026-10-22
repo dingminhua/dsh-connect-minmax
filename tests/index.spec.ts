@@ -244,6 +244,10 @@ describe('apply', () => {
       const copy = result.registered[1]!.adapter as MiniMaxAdapter
       expect(copy.providerInfo('minimax-cn-owned001').name).toBe('MiniMax 副本 · 副本 2')
       expect(await copy.listModels('minimax-cn-owned001')).toHaveLength(MINIMAX_MODELS.length)
+
+      // apply() 里的镜像同步是 fire-and-forget：必须等它落盘再恢复 DSH_HOME，
+      // 否则这次写盘会落到真实 DSH_HOME（把真实凭据写进用户目录）。
+      await new Promise(resolve => setTimeout(resolve, 50))
     } finally {
       if (previous === undefined) delete process.env['DSH_HOME']
       else process.env['DSH_HOME'] = previous
