@@ -199,6 +199,12 @@ export interface GuardStreamContext {
   readonly acquire: () => Promise<unknown>
   /** 丢弃缓存，让下一次 `acquire` 重新取（401 之后使用）。 */
   readonly invalidate: () => void
+  /**
+   * 当前账号积分耗尽时，换到池里另一个账号。
+   *
+   * @returns 换成了返回 `true`（可以重试）；池里没有别的账号返回 `false`。
+   */
+  readonly switchAccount?: () => boolean
 }
 
 /** 预检凭据：失败时给 `MISSING_CREDENTIAL`，而不是让它退化成 UNKNOWN。 */
@@ -225,9 +231,10 @@ function authFailure(error: LlmError, cause: unknown): LlmError {
 /**
  * 把一次 provider 尝试包成"预检 + 401 重试一次 + 错误分类"的流。
  *
- * 三条不变量：
+ * 四条不变量：
  *   - 重试只在**尚未输出任何 chunk**时发生：已经流出去的内容不能撤回；
- *   - 重试最多一次，且必须是因为 `AUTH`（别的错误重试只会让用户多等一轮）；
+ *   - `AUTH` 重试最多一次；`QUOTA` 在池里还有别的账号时再重试一次；
+ *   - 每次重试都必须真的"换了个东西"（换凭据、换账号），否则就是无意义的忙等；
  *   - 用户取消（`signal.aborted`）优先于一切分类，永远报 `ABORTED`。
  *
  * @param run - 发起一次完整 provider 尝试；401 重试时会被再次调用。
@@ -243,6 +250,7 @@ export async function* guardStream(
   await acquireCredential(guard, signal)
   let emitted = false
   let retried = false
+  let switched = false
   for (;;) {
     try {
       for await (const chunk of run()) {
@@ -261,6 +269,14 @@ export async function* guardStream(
           continue
         }
         throw authFailure(failure, error)
+      }
+      // 积分耗尽：池里有别的账号就换一个重试。用户要的正是这个——一个号的积分
+      // 用完了，请求不该直接失败，而应该接着用另一个号。只在未输出任何 chunk 时
+      // 重试（已经流出去的内容撤不回来），且只换一次，避免多账号互相失败时空转。
+      if (failure.code === 'QUOTA' && !switched && !emitted && guard.switchAccount?.() === true) {
+        switched = true
+        await acquireCredential(guard, signal)
+        continue
       }
       throw failure
     }

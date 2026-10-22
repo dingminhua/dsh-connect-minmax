@@ -357,3 +357,72 @@ describe('MiniMaxAdapter', () => {
     )
   })
 })
+
+describe('guardStream / 积分耗尽自动换号', () => {
+  // 用户的原话："一个账号积分没有了，自动切换到另外一个账号"。
+  // 触发点在请求内：上游回配额错误、且还没吐任何 chunk，就换号重来。
+  it('QUOTA 且池里还有别的账号 → 换号重试，用户看到的是正常结果', async () => {
+    const switchAccount = vi.fn(() => true)
+    const { guard } = fakeGuard({ switchAccount })
+    let attempts = 0
+    const run = (): AsyncIterable<StreamChunk> => {
+      attempts += 1
+      if (attempts === 1) return fail(new Error('insufficient balance'))()
+      return succeed('换号后成功')()
+    }
+    const chunks = await collect(guardStream(run, guard))
+    // 用户看到的是一次成功的回复，不是一条"积分不足"的错误。
+    expect(chunks).toEqual([textChunk('换号后成功')])
+    expect(attempts).toBe(2)
+    expect(switchAccount).toHaveBeenCalledTimes(1)
+  })
+
+  it('换号后仍失败 → 不再换第三次（多账号互相失败时空转没意义）', async () => {
+    const switchAccount = vi.fn(() => true)
+    const { guard } = fakeGuard({ switchAccount })
+    let attempts = 0
+    const run = (): AsyncIterable<StreamChunk> => {
+      attempts += 1
+      return fail(new Error('insufficient quota'))()
+    }
+    await expectFailure(() => collect(guardStream(run, guard)), 'QUOTA')
+    expect(attempts).toBe(2)
+    expect(switchAccount).toHaveBeenCalledTimes(1)
+  })
+
+  it('池里没有别的账号时直接以 QUOTA 失败（不假称换过）', async () => {
+    const switchAccount = vi.fn(() => false)
+    const { guard } = fakeGuard({ switchAccount })
+    let attempts = 0
+    const run = (): AsyncIterable<StreamChunk> => {
+      attempts += 1
+      return fail(new Error('insufficient balance'))()
+    }
+    await expectFailure(() => collect(guardStream(run, guard)), 'QUOTA')
+    expect(attempts).toBe(1)
+  })
+
+  it('已经产出 chunk 后遇到积分不足不重试（流不能撤回）', async () => {
+    const switchAccount = vi.fn(() => true)
+    const { guard } = fakeGuard({ switchAccount })
+    let attempts = 0
+    const run = (): AsyncIterable<StreamChunk> => (async function* generate(): AsyncIterable<StreamChunk> {
+      attempts += 1
+      yield textChunk('半截')
+      throw new Error('insufficient balance')
+    })()
+    const received: StreamChunk[] = []
+    await expectFailure(async () => {
+      for await (const chunk of guardStream(run, guard)) received.push(chunk)
+    }, 'QUOTA')
+    expect(received).toEqual([textChunk('半截')])
+    expect(attempts).toBe(1)
+    expect(switchAccount).not.toHaveBeenCalled()
+  })
+
+  it('没有提供 switchAccount 时行为不变（老调用点不受影响）', async () => {
+    const { guard } = fakeGuard()
+    const run = () => fail(new Error('balance exhausted'))()
+    await expectFailure(() => collect(guardStream(run, guard)), 'QUOTA')
+  })
+})
