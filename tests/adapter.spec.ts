@@ -430,15 +430,16 @@ describe('guardStream / 积分耗尽自动换号', () => {
   })
 })
 
+/** 最小可用的凭据来源替身（池与能力探测的测试共用）。 */
+const localSource = (token = 'mmoat_x') => ({
+  region: 'cn' as const,
+  regionLabel: '国内版',
+  baseUrl: 'https://x',
+  token: async () => token,
+  invalidate: () => undefined,
+})
+
 describe('switchAccountOf（适配器如何发现池的换号能力）', () => {
-  /** 最小可用的凭据来源替身。 */
-  const localSource = (token = 'mmoat_x') => ({
-    region: 'cn' as const,
-    regionLabel: '国内版',
-    baseUrl: 'https://x',
-    token: async () => token,
-    invalidate: () => undefined,
-  })
 
   it('池化来源 → 拿到换号函数，调用时真的换号', () => {
     // 这是"自动切换"能被触发的前提：适配器只认接口，能力探测漏了，
@@ -457,5 +458,33 @@ describe('switchAccountOf（适配器如何发现池的换号能力）', () => {
 
   it('单账号来源 → undefined（老行为完全不变）', () => {
     expect(switchAccountOf(localSource())).toBeUndefined()
+  })
+})
+
+describe('池 + guardStream 组合：积分耗尽真的会换号', () => {
+  it('第一个号配额失败 → 自动落到第二个号，用户拿到正常回复', async () => {
+    const pool = new MiniMaxAccountPool('cn', { regionLabel: '国内版', baseUrl: 'https://x' })
+    pool.setAccounts([
+      { id: 'a', label: 'a', live: true, source: localSource('mmoat_a') },
+      { id: 'b', label: 'b', live: false, source: localSource('mmoat_b') },
+    ])
+    expect(pool.active).toBe('a')
+
+    const switchAccount = switchAccountOf(pool)
+    expect(switchAccount).toBeDefined()
+    // 不直接用 fakeGuard：这里要证明池的 switchAway 挂到 guardStream 上真的生效。
+    const { guard } = fakeGuard({ ...switchAccount === undefined ? {} : { switchAccount } })
+
+    let attempts = 0
+    const run = (): AsyncIterable<StreamChunk> => {
+      attempts += 1
+      // 第一次是 a 号：配额不足；换号后第二次成功。
+      if (attempts === 1) return fail(new Error('insufficient balance'))()
+      return succeed(`回复自 ${pool.active}`)()
+    }
+    const chunks = await collect(guardStream(run, guard))
+    expect(chunks).toEqual([textChunk('回复自 b')])
+    expect(pool.active).toBe('b')
+    expect(attempts).toBe(2)
   })
 })
