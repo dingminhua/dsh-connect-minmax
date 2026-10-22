@@ -70,6 +70,26 @@ describe('MINIMAX_STATUS_PATH', () => {
   })
 })
 
+describe('设备码登录（authorizing）', () => {
+  it('验证码与授权地址一路透传到状态文档', async () => {
+    const auth = authStub({
+      inspect: async () => ({
+        state: 'authorizing',
+        source: 'file',
+        userCode: 'ZHHJ-TCF3',
+        verificationUri: 'https://account.minimax.io/oauth-authorize?user_code=ZHHJ-TCF3',
+      }),
+    })
+    const login = await inspectWithTimeout(auth)
+    expect(login.userCode).toBe('ZHHJ-TCF3')
+    expect(login.verificationUri).toContain('user_code=ZHHJ-TCF3')
+
+    const payload = await buildMiniMaxStatus(depsStub({ routes: [routeStub({ auth })] }))
+    expect(payload.routes[0]?.login.userCode).toBe('ZHHJ-TCF3')
+    expect(payload.login.userCode).toBe('ZHHJ-TCF3')
+  })
+})
+
 describe('buildMiniMaxStatus', () => {
   it('组装出完整文档', async () => {
     const payload = await buildMiniMaxStatus(depsStub(), 1_700_000_000_000)

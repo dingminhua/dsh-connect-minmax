@@ -282,6 +282,10 @@ export async function inspectWithTimeout(
       ...(status.generation === undefined ? {} : { generation: status.generation }),
       ...(status.expiresAtMs === undefined ? {} : { expiresAtMs: status.expiresAtMs }),
       ...(detail === undefined ? {} : { detail }),
+      // 设备码登录等待期：验证码与授权地址必须一路透传到卡片，
+      // 否则用户只看到"正在等你完成授权"，却不知道去哪里、填哪个码。
+      ...(status.userCode === undefined ? {} : { userCode: status.userCode }),
+      ...(status.verificationUri === undefined ? {} : { verificationUri: status.verificationUri }),
     }
   } finally {
     if (timer !== undefined) clearTimeout(timer)
