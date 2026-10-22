@@ -271,7 +271,7 @@ describe('projectModel（逐模型上下文档位）', () => {
 
   it('没有覆盖时等于全局档：longContext=true 让 M3 用 1M', () => {
     const warned: string[] = []
-    const result = projectModel(specOf('MiniMax-M3'), true, {}, message => warned.push(message))
+    const result = projectModel(specOf('MiniMax-M3'), true, {}, {}, message => warned.push(message))
     expect(result.contextWindow).toBe(1_000_000)
     expect(warned).toEqual([])
   })
@@ -282,6 +282,7 @@ describe('projectModel（逐模型上下文档位）', () => {
       specOf('MiniMax-M3'),
       true,
       { 'MiniMax-M3': 512_000 },
+      {},
       () => undefined,
     )
     expect(result.contextWindow).toBe(512_000)
@@ -293,6 +294,7 @@ describe('projectModel（逐模型上下文档位）', () => {
       specOf('MiniMax-M2.7'),
       false,
       { 'MiniMax-M2.7': 1_000_000 },
+      {},
       message => warned.push(message),
     )
     expect(result.contextWindow).toBe(204_800)
@@ -302,7 +304,7 @@ describe('projectModel（逐模型上下文档位）', () => {
 
   it('只影响被点名的模型，其余原样', () => {
     const warned: string[] = []
-    const m3 = projectModel(specOf('MiniMax-M3'), false, { 'MiniMax-M3.1-Flash': 1_000_000 }, m => warned.push(m))
+    const m3 = projectModel(specOf('MiniMax-M3'), false, { 'MiniMax-M3.1-Flash': 1_000_000 }, {}, m => warned.push(m))
     expect(m3.contextWindow).toBe(512_000)
     expect(warned).toEqual([])
   })

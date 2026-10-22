@@ -124,6 +124,11 @@ export interface MiniMaxModelSpec {
   contextWindow: number
   /** 上游可选上下文档位；第二档即 1M。 */
   contextWindowOptions?: readonly number[]
+  /**
+   * 上游**真实**支持的模态。目录项的 `input` 会被 `modelImages` 掩码改写，
+   * 而这个字段永远是原值——卡片要靠它区分"上游不支持"与"用户关掉了"。
+   */
+  upstreamInput?: readonly string[]
   maxTokens: number
   input: readonly ('text' | 'image')[]
   reasoning: boolean
@@ -308,6 +313,40 @@ export function withModelContextWindow(
 /** 某个模型可选的上下文档位（卡片用它渲染下拉框）。 */
 export function contextWindowOptionsOf(spec: MiniMaxModelSpec): readonly number[] {
   return spec.contextWindowOptions ?? [spec.contextWindow]
+}
+
+/**
+ * 按"每模型图片输入"开关调整目录项。
+ *
+ * 这是一个**不对称**的操作，而这个不对称正是它的正确性所在：
+ *
+ *  - 上游支持图片、用户关掉 → 允许。这是真实的能力掩码：宿主不再往这个模型发图，
+ *    用户可能因此省积分，或绕开上游视觉解析的不稳定。
+ *  - 上游不支持图片、用户开启 → 忽略并回落。声明一个上游不受理的模态，会让宿主
+ *    把图片塞进请求、然后在线上收到一个 4xx —— 那是把用户的显式操作变成一个 bug。
+ *
+ * @param spec - 目录项。
+ * @param requested - 用户为该模型设置的图片开关；`undefined` 表示没动过。
+ * @param fallback - 需要回落时返回的结果。
+ * @returns 调整后的目录项。
+ */
+export function withModelImages(
+  spec: MiniMaxModelSpec,
+  requested: boolean | undefined,
+  fallback: MiniMaxModelSpec,
+): MiniMaxModelSpec {
+  if (requested === undefined) return fallback
+  const upstream = spec.input.includes('image')
+  // 上游不支持时无论用户要开还是要关，都保持目录里的事实。
+  if (!upstream) return fallback
+  if (requested) return fallback
+  return {
+    ...fallback,
+    input: fallback.input.filter(entry => entry !== 'image'),
+    // 掩码只改 `input`；`upstreamInput` 必须留住原值，否则卡片会把
+    // "用户关掉了"渲染成"上游不支持"，那个复选框就再也勾不回来了。
+    upstreamInput: [...spec.input],
+  }
 }
 
 /** 按 id 取目录项；未知名返回 `undefined`（不做模糊匹配）。 */

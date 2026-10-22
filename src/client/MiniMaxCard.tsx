@@ -64,6 +64,7 @@ import {
   toggleRegion,
   writeLongContext,
   writeModelContextWindow,
+  writeModelImages,
   writeModels,
   writeRegions,
 } from './settings.ts'
@@ -789,6 +790,7 @@ function ModelPanel(props: {
   probes: Record<string, ModelProbe>
   onToggleModel(modelId: string, enabled: boolean): void
   onModelContext(modelId: string, window: number): void
+  onModelImages(modelId: string, enabled: boolean): void
   onSelectAll(): void
   onTest(modelId: string): void
   onLongContext(enabled: boolean): void
@@ -797,7 +799,7 @@ function ModelPanel(props: {
   t: MiniMaxTranslate
 }): ReactElement {
   const {
-    status, region, canWrite, probes, onToggleModel, onModelContext, onSelectAll, onTest, onLongContext, busy, message, t,
+    status, region, canWrite, probes, onToggleModel, onModelContext, onModelImages, onSelectAll, onTest, onLongContext, busy, message, t,
   } = props
   // 模型目录是**全局**的（两个区域共用同一份 config.yaml 快照），所以这一页
   // 不随区域变化——但路由可用性会变，测试要打当前区域那条路由。
@@ -853,6 +855,7 @@ function ModelPanel(props: {
           route={testRoute?.route}
           onToggle={onToggleModel}
           onModelContext={onModelContext}
+          onModelImages={onModelImages}
           onTest={onTest}
           t={t}
         />
@@ -874,11 +877,15 @@ function ModelRow(props: {
   route: string | undefined
   onToggle(modelId: string, enabled: boolean): void
   onModelContext(modelId: string, window: number): void
+  onModelImages(modelId: string, enabled: boolean): void
   onTest(modelId: string): void
   t: MiniMaxTranslate
 }): ReactElement {
-  const { model, enabled, canWrite, busy, probe, route, onToggle, onModelContext, onTest, t } = props
-  const supportsImage = model.input.includes('image')
+  const { model, enabled, canWrite, busy, probe, route, onToggle, onModelContext, onModelImages, onTest, t } = props
+  // 上游能力与"当前是否发图"是两件事：`input` 是被 modelImages 掩码后的结果。
+  // 只看它就画控件的话，用户一关图片复选框就消失，再也勾不回来了。
+  const upstreamImages = (model.upstreamInput.length > 0 ? model.upstreamInput : model.input).includes('image')
+  const sendsImages = model.input.includes('image')
   return (
     <div className={`dsm-minimax-row${enabled ? '' : ' dsm-minimax-row-off'}`}>
       <div className="dsm-minimax-row-main">
@@ -918,9 +925,21 @@ function ModelRow(props: {
               </select>
             </label>
           )}
-          <span className={`dsm-minimax-chip${supportsImage ? ' dsm-minimax-chip-on' : ''}`}>
-            {supportsImage ? t('models.imageYes') : t('models.imageNo')}
-          </span>
+          {upstreamImages
+            ? (
+              <label className="dsm-minimax-inline-check" title={canWrite ? t('models.imageHint') : t('settings.readOnly')}>
+                <input
+                  type="checkbox"
+                  checked={sendsImages}
+                  disabled={!canWrite || busy}
+                  onChange={event => {
+                    onModelImages(model.id, (event.target as HTMLInputElement).checked)
+                  }}
+                />
+                {t('models.imageYes')}
+              </label>
+            )
+            : <span className="dsm-minimax-chip">{t('models.imageNo')}</span>}
           <span className={`dsm-minimax-chip${model.reasoning ? ' dsm-minimax-chip-on' : ''}`}>
             {model.reasoning
               ? (model.thinkingMode === 'forced' ? t('models.thinkingForced') : t('models.thinkingSwitchable'))
@@ -1122,6 +1141,17 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
     }
   }, [settingsScope, afterWrite])
 
+  const handleModelImages = useCallback(async (modelId: string, wants: boolean): Promise<void> => {
+    if (settingsScope === undefined) return
+    try {
+      await writeModelImages(settingsScope, modelId, wants)
+      setActionMessage(undefined)
+      await afterWrite()
+    } catch (caught: unknown) {
+      setActionMessage(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [settingsScope, afterWrite])
+
   const handleSelectAll = useCallback(async (): Promise<void> => {
     if (settingsScope === undefined || status === undefined) return
     // 全部启用 = 写空列表（宿主语义：空 = 目录全部）。这样以后上游新增的模型
@@ -1243,6 +1273,7 @@ export function MiniMaxCard({ t, settingsScope }: MiniMaxCardProps): ReactElemen
                   probes={probes}
                   onToggleModel={(id, enabled) => { void handleToggleModel(id, enabled) }}
                   onModelContext={(id, window) => { void handleModelContext(id, window) }}
+                  onModelImages={(id, wants) => { void handleModelImages(id, wants) }}
                   onSelectAll={() => { void handleSelectAll() }}
                   onTest={id => { void handleTest(id) }}
                   onLongContext={enabled => { void handleLongContext(enabled) }}

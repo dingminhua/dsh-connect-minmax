@@ -443,6 +443,7 @@ function statusOf(options: {
     name: id,
     contextWindow: 512_000,
     contextWindowOptions: [512_000, 1_000_000],
+    upstreamInput: ['text', 'image'],
     maxTokens: 128_000,
     input: ['text'],
     reasoning: true,

@@ -34,8 +34,8 @@ const t: MiniMaxTranslate = (key, params) => {
 }
 
 const MODELS = [
-  { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 512_000, maxTokens: 128_000, input: ['text', 'image'], reasoning: true },
-  { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', contextWindow: 204_800, maxTokens: 131_072, input: ['text'], reasoning: false },
+  { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 512_000, contextWindowOptions: [512_000, 1_000_000], upstreamInput: ['text', 'image'], maxTokens: 128_000, input: ['text', 'image'], reasoning: true },
+  { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', contextWindow: 204_800, upstreamInput: ['text', 'image'], maxTokens: 131_072, input: ['text', 'image'], reasoning: false },
 ]
 
 /** 一份完整的状态文档：两条路由（国内就绪、国际未就绪）。 */
@@ -112,11 +112,34 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** 挂载卡片并让 effect 里的 fetch 结算。 */
-async function mount(): Promise<void> {
+/**
+ * 挂载卡片并让 effect 里的 fetch 结算。
+ *
+ * `scope` 决定卡片是不是可写：不给就是只读态，所有控件都 disabled——所以任何
+ * 断言"控件可点"的测试都必须显式传一份，否则测的是只读降级路径。
+ */
+async function mount(scope?: {
+  getSnapshot(): { value?: unknown }
+  set(field: string, value: unknown): Promise<boolean | void>
+}): Promise<void> {
   await act(async () => {
-    root.render(<MiniMaxCard t={t} />)
+    root.render(<MiniMaxCard t={t} {...(scope === undefined ? {} : { settingsScope: scope })} />)
   })
+}
+
+/** 一份可写的设置作用域替身。 */
+function writableScope(): {
+  getSnapshot(): { value?: unknown }
+  set(field: string, value: unknown): Promise<boolean | void>
+} {
+  const store: Record<string, unknown> = { models: [], regions: ['cn', 'global'], longContext: false }
+  return {
+    getSnapshot: () => ({ value: store }),
+    set: async (field, value) => {
+      store[field] = value
+      return true
+    },
+  }
 }
 
 /**
@@ -192,6 +215,36 @@ function mockFetch(body: unknown, ok = true, status = 200): void {
 }
 
 describe('MiniMaxCard 渲染', () => {
+  it('图片被掩码后仍是可勾回的复选框，而不是"不支持"的死标签', async () => {
+    // M3 的 input 被 modelImages 改成只剩 text，但 upstreamInput 说上游支持图片。
+    mockFetch(payload({
+      models: [{ ...MODELS[0], input: ['text'], upstreamInput: ['text', 'image'] }],
+      catalog: [{ ...MODELS[0], input: ['text'], upstreamInput: ['text', 'image'] }],
+    }))
+    await mount(writableScope())
+    await clickPanel('models')
+    const row = cardRowOf('MiniMax-M3')
+    const boxes = Array.from(row?.querySelectorAll<HTMLInputElement>('input[type=checkbox]') ?? [])
+    // 第一个是"启用该模型"（勾着），第二个是"发图片"（被掩码成未勾，但仍可点）。
+    expect(boxes.length).toBeGreaterThanOrEqual(2)
+    expect(boxes[1]?.hasAttribute('disabled')).toBe(false)
+    expect(boxes[1]?.checked).toBe(false)
+    expect(row?.textContent ?? '').toContain('models.imageYes')
+  })
+
+  it('上游真不支持图片时不给复选框，只给标签', async () => {
+    mockFetch(payload({
+      models: [{ ...MODELS[1], input: ['text'], upstreamInput: ['text'] }],
+      catalog: [{ ...MODELS[1], input: ['text'], upstreamInput: ['text'] }],
+    }))
+    await mount(writableScope())
+    await clickPanel('models')
+    const row = cardRowOf('MiniMax-M2.7')
+    // 只有"启用模型"一个复选框。
+    expect(row?.querySelectorAll('input[type=checkbox]').length ?? 0).toBe(1)
+    expect(row?.textContent ?? '').toContain('models.imageNo')
+  })
+
   it('读到状态后渲染出登录态；模型页切过去才有模型', async () => {
     mockFetch(payload())
     await mount()

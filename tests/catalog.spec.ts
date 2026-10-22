@@ -8,7 +8,7 @@
 import type { Model } from '@earendil-works/pi-ai'
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, contextWindowOptionsOf, findModelSpec, modelIds, regionBaseUrl, toPiModel, withContextWindow, withModelContextWindow, type MiniMaxModelSpec } from '../src/catalog.ts'
+import { DEFAULT_BASE_URL_CN, DEFAULT_BASE_URL_GLOBAL, MINIMAX_EFFORT_LEVELS, MINIMAX_M3_1_FLASH_PREVIEW, MINIMAX_MODELS, ROUTE, contextWindowOptionsOf, findModelSpec, modelIds, regionBaseUrl, toPiModel, withContextWindow, withModelContextWindow, withModelImages, type MiniMaxModelSpec } from '../src/catalog.ts'
 
 const byId = (id: string): MiniMaxModelSpec => {
   const spec = findModelSpec(id)
@@ -234,5 +234,45 @@ describe('withModelContextWindow / contextWindowOptionsOf', () => {
     }
     expect(contextWindowOptionsOf(bare)).toEqual([1234])
     expect(withModelContextWindow(bare, 1234, bare).contextWindow).toBe(1234)
+  })
+})
+
+describe('withModelImages（不对称的能力掩码）', () => {
+  // 当前目录里四个模型**都**支持图片（`input: ['text','image']`），所以下面两例
+  // 用合成 spec：真实目录里暂时没有"纯文本"模型可断言，但那条拒绝路径必须被测到，
+  // 否则以后加一个纯文本模型时它会静默变成"用户能勾、上游不认"。
+  const IMAGE_MODEL = byId('MiniMax-M3')
+  const TEXT_ONLY: MiniMaxModelSpec = {
+    ...IMAGE_MODEL,
+    id: 'MiniMax-TextOnly',
+    input: ['text'],
+  }
+
+  it('上游支持图片时允许关掉：宿主不再往这个模型发图', () => {
+    expect(IMAGE_MODEL.input).toContain('image')
+    const result = withModelImages(IMAGE_MODEL, false, IMAGE_MODEL)
+    expect(result.input).not.toContain('image')
+    expect(result.input).toContain('text')
+  })
+
+  it('上游支持时 requested=true 不改任何东西', () => {
+    expect(withModelImages(IMAGE_MODEL, true, IMAGE_MODEL).input).toContain('image')
+  })
+
+  it('上游不支持图片时开启被忽略：声明一个上游不受理的模态会把用户的显式操作变成线上 4xx', () => {
+    expect(withModelImages(TEXT_ONLY, true, TEXT_ONLY).input).toEqual(['text'])
+    // 关掉一个本来就没有的能力同样不该凭空造出 image。
+    expect(withModelImages(TEXT_ONLY, false, TEXT_ONLY).input).toEqual(['text'])
+  })
+
+  it('没动过开关时原样返回 fallback（fallback 才是当前生效值）', () => {
+    const fallback = { ...IMAGE_MODEL, input: ['text'] as ('text' | 'image')[] }
+    expect(withModelImages(IMAGE_MODEL, undefined, fallback).input).toEqual(['text'])
+  })
+
+  it('掩码只改 input，upstreamInput 留住原值（否则关掉的复选框再也勾不回来）', () => {
+    const masked = withModelImages(IMAGE_MODEL, false, { ...IMAGE_MODEL, upstreamInput: [...IMAGE_MODEL.input] })
+    expect(masked.input).toEqual(['text'])
+    expect(masked.upstreamInput).toEqual(['text', 'image'])
   })
 })

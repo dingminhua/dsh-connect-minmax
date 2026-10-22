@@ -10,9 +10,13 @@
  *  - `regions`：注册哪些区域（国内版 / 国际版）；
  *  - `longContext`：是否用 1M 长上下文档。
  *
- * 刻意**不**做成开关的东西：逐模型的"支持图片""可关思考"。那是上游决定的**事实**
- * （M2.7 就是不能输入图片），不是用户偏好；做成可勾的复选框等于给用户一个
- * 改了也不生效、甚至会让声明与真实能力不符的假控件。
+ * 逐模型的图片开关是**不对称**的：关掉一个上游支持的模态是真实的能力掩码
+ * （宿主从此不再往这个模型发图，可能因此省积分或绕开上游视觉解析的不稳定），
+ * 而开启一个上游不支持的模态会被宿主忽略——声明一个上游不受理的模态只会把
+ * 用户的显式操作变成线上一条 4xx。
+ *
+ * 仍然**不做**：逐模型的"可关思考"开关。思考档位是 provider 级的单个值
+ * （`profile.reasoning`），要按模型分就得改 pi-ai 的契约，不是插件侧能表达的。
  *
  * # 写入必须回读校验
  *
@@ -37,7 +41,8 @@ export interface MiniMaxSettingsScope {
 }
 
 /** 卡片可写的字段名。 */
-export type MiniMaxWritableField = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelContextWindows'
+export type MiniMaxWritableField
+  = 'models' | 'regions' | 'longContext' | 'modelContextWindows' | 'modelImages' | 'modelContextWindows'
 
 /** 写入没落地的错误。 */
 export class MiniMaxSettingsWriteError extends Error {
@@ -125,12 +130,31 @@ export function writeModelContextWindow(
   modelId: string,
   window: number,
 ): Promise<void> {
-  const current = readField(scope, 'modelContextWindows')
+  return writeFlag(scope, 'modelContextWindows', modelId, window)
+}
+
+/** 写入某个模型的图片输入开关（见文件头的不对称说明）。 */
+export function writeModelImages(
+  scope: MiniMaxSettingsScope,
+  modelId: string,
+  enabled: boolean,
+): Promise<void> {
+  return writeFlag(scope, 'modelImages', modelId, enabled)
+}
+
+/** 写入一个"模型 id → 数值/布尔"映射里的单项。 */
+function writeFlag<T extends number | boolean>(
+  scope: MiniMaxSettingsScope,
+  field: 'modelContextWindows' | 'modelImages',
+  modelId: string,
+  value: T,
+): Promise<void> {
+  const current = readField(scope, field)
   const base = (typeof current === 'object' && current !== null && !Array.isArray(current))
-    ? { ...(current as Record<string, number>) }
+    ? { ...(current as Record<string, T>) }
     : {}
-  base[modelId] = window
-  return writeField(scope, 'modelContextWindows', base, (expected, actual) => {
+  base[modelId] = value
+  return writeField(scope, field, base, (expected, actual) => {
     if (typeof actual !== 'object' || actual === null || Array.isArray(actual)) return false
     const readBack = actual as Record<string, unknown>
     const wanted = expected as Record<string, unknown>

@@ -36,6 +36,7 @@ import {
   routeForRegion,
   withContextWindow,
   withModelContextWindow,
+  withModelImages,
 } from './catalog.ts'
 import type { MiniMaxModelSpec, MiniMaxRegion } from './catalog.ts'
 import type { MiniMaxCredentialSource } from './auth.ts'
@@ -107,6 +108,7 @@ export interface MiniMaxConfig {
    */
   longContext?: boolean
   modelContextWindows?: Record<string, number>
+  modelImages?: Record<string, boolean>
 }
 
 /** 配置 schema：值经过 schemastery 校验/补默认后才进 `apply()`。 */
@@ -138,6 +140,10 @@ export const Config: z<MiniMaxConfig> = z.object({
     .dict(z.number().step(1).min(1))
     .default({})
     .description('逐模型上下文档位（id → 窗口）；只接受该模型确实提供的档位，其余忽略。'),
+  modelImages: z
+    .dict(z.boolean())
+    .default({})
+    .description('逐模型图片输入开关（id → 是否发图）；只允许关掉上游支持的模型，开启一个上游不支持的会被忽略。'),
 }) as unknown as z<MiniMaxConfig>
 
 /**
@@ -188,20 +194,34 @@ export function selectModels(
 export function projectModel(
   spec: MiniMaxModelSpec,
   longContext: boolean,
-  overrides: Record<string, number | undefined> | undefined,
+  contextOverrides: Record<string, number | undefined> | undefined,
+  imageOverrides: Record<string, boolean | undefined> | undefined,
   warn: (message: string) => void,
 ): MiniMaxModelSpec {
-  const base = withContextWindow(spec, longContext)
-  const requested = overrides?.[spec.id]
-  if (requested === undefined) return base
-  const options = contextWindowOptionsOf(spec)
-  if (!options.includes(requested)) {
-    warn(
-      `模型 "${spec.id}" 的上下文被设成 ${requested}，但它只提供 ${options.join(' / ')}，已忽略。`,
-    )
-    return base
+  // `upstreamInput` 永远是掩码前的原值：卡片要靠它区分"上游不支持"与"用户关掉了"。
+  const base: MiniMaxModelSpec = {
+    ...withContextWindow(spec, longContext),
+    upstreamInput: [...spec.input],
   }
-  return withModelContextWindow(spec, requested, base)
+
+  // 先定上下文档位。
+  let result = base
+  const requestedWindow = contextOverrides?.[spec.id]
+  if (requestedWindow !== undefined) {
+    const options = contextWindowOptionsOf(spec)
+    if (options.includes(requestedWindow)) {
+      result = withModelContextWindow(spec, requestedWindow, base)
+    } else {
+      warn(`模型 "${spec.id}" 的上下文被设成 ${requestedWindow}，但它只提供 ${options.join(' / ')}，已忽略。`)
+    }
+  }
+
+  // 再定图片输入：开启一个上游不支持的模态会被忽略并 warn（见 withModelImages）。
+  const wantsImages = imageOverrides?.[spec.id]
+  if (wantsImages === true && !spec.input.includes('image')) {
+    warn(`模型 "${spec.id}" 上游不支持图片输入，开启已被忽略。`)
+  }
+  return withModelImages(spec, wantsImages, result)
 }
 
 /**
@@ -232,7 +252,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
 
   const requestedRegions = normalizeRegions(config.regions, warn)
   const longContext = config.longContext ?? false
-  const models = selectModels(config.models, warn).map(spec => projectModel(spec, longContext, config.modelContextWindows, warn))
+  const models = selectModels(config.models, warn).map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, warn))
 
   /** 每个区域一条路由；装配方式完全相同，只有凭据面与 baseUrl 不同。 */
   const registeredRoutes: MiniMaxStatusRouteDeps[] = []
@@ -512,7 +532,7 @@ export function apply(ctx: Context, config: MiniMaxConfig): void {
       models,
       // 全目录同样过一遍长上下文档位：卡片要展示的"上下文窗口"必须是用户
       // 当前设置下的真实值，否则勾了 longContext 卡片还显示 512K。
-      catalog: MINIMAX_MODELS.map(spec => projectModel(spec, longContext, config.modelContextWindows, warn)),
+      catalog: MINIMAX_MODELS.map(spec => projectModel(spec, longContext, config.modelContextWindows, config.modelImages, warn)),
       enabledRegions: requestedRegions,
       longContext,
       version: PLUGIN_VERSION,

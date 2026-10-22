@@ -95,6 +95,12 @@ export interface MiniMaxModelView {
    * 档位列表出来——给用户一个改了不生效的下拉框比没有下拉框更糟。
    */
   contextWindowOptions: number[]
+  /**
+   * 上游**真实**支持的模态（未经 `modelImages` 掩码）。
+   *
+   * 空数组 = 旧版本应答没有这个字段，卡片按"`input` 即上游能力"处理。
+   */
+  upstreamInput: string[]
   maxTokens: number
   input: string[]
   reasoning: boolean
@@ -272,6 +278,9 @@ function parseModels(value: unknown): MiniMaxModelView[] {
       contextWindow: finiteNumberOf(row['contextWindow']) ?? 0,
       contextWindowOptions: Array.isArray(row['contextWindowOptions'])
         ? row['contextWindowOptions'].filter((item): item is number => typeof item === 'number')
+        : [],
+      upstreamInput: Array.isArray(row['upstreamInput'])
+        ? row['upstreamInput'].filter((item): item is string => typeof item === 'string')
         : [],
       maxTokens: finiteNumberOf(row['maxTokens']) ?? 0,
       input: Array.isArray(row['input'])

@@ -69,15 +69,22 @@ The card on the plugin page follows the same shape as its siblings (qoder / work
   source, when credits were read, catalog and enabled model counts, account pool, last error. This page
   has no control that changes settings.
 
-The card can write back the `models` / `regions` / `longContext` / `modelContextWindows` config fields and **verifies each write
+The card can write back the `models` / `regions` / `longContext` / `modelContextWindows` / `modelImages`
+config fields and **verifies each write
 by reading it back**: the settings surface may report success without the value landing, and without that
 check the card would tick a checkbox while the config stayed unchanged. When the host exposes no settings
 surface, the whole card degrades to read-only and says so.
 
-**Deliberately absent**: per-model "supports images" / "thinking can be off" toggles. Those are facts
-decided upstream (`MiniMax-M2.7` simply cannot take image input), not preferences; making them checkboxes
-would hand the user a control that changes nothing — or worse, one that makes the declared capability
-disagree with reality.
+The per-model **image** toggle is deliberately **asymmetric**: turning off a modality upstream supports is
+a real capability mask (the harness stops sending images to that model — which may save credits or dodge
+unstable vision parsing), while turning one on for a model that does not support it is **ignored with a
+warning** — declaring a modality upstream will not accept just turns the user's explicit action into a
+4xx on the wire.
+
+**Deliberately absent**: a per-model "thinking can be off" toggle. The thinking level is a single
+provider-level value (`profile.reasoning`); splitting it per model would mean changing pi-ai's contract,
+which is not something the plugin side can express. What *is* per-model is whether an `off` level exists at
+all (`MiniMax-M3.1-Flash` forces thinking; the card labels it "always on").
 
 ## Credits and daily check-in
 
@@ -120,6 +127,7 @@ sign-in and does not impersonate the official client.
 | `baseUrl` | empty | override the **domestic (CN)** hosted base URL (no trailing `/v1`; the SDK appends `/v1/messages`) |
 | `globalBaseUrl` | empty | override the **international (Global)** hosted base URL (same rule) |
 | `longContext` | `false` | use the 1M context tier (`M3` / `M3.1-Flash`); upstream bills it as higher usage |
+| `modelImages` | `{}` | **per-model** image-input toggle (id → send images or not). Only turning off a supported modality takes effect; enabling one upstream does not support is ignored with a warning |
 | `modelContextWindows` | `{}` | **per-model** context tier (id → window), overriding `longContext`. Only tiers the model actually offers are accepted; anything else is ignored with a warning — a window upstream does not honour would make the harness compress context against the wrong number |
 
 ## Diagnostics

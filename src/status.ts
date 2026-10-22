@@ -71,6 +71,14 @@ export interface MiniMaxStatusModel {
   contextWindow: number
   /** 该模型可选的上下文档位（含当前值）。 */
   contextWindowOptions?: number[]
+  /**
+   * 上游**真实**支持的输入模态，与 `input` 分开给。
+   *
+   * `input` 是投影后的结果（可能被 `modelImages` 掩码过）。卡片只看 `input`
+   * 的话，用户一旦关掉图片，控件就会退化成"不支持"的样子，再也勾不回来——
+   * 所以必须同时知道上游本来支持什么。
+   */
+  upstreamInput?: string[]
   maxTokens: number
   input: string[]
   reasoning: boolean
@@ -185,6 +193,8 @@ export interface MiniMaxStatusModelSpec {
   contextWindow: number
   /** 上游为该模型提供的档位；卡片据此渲染下拉框，而不是猜一个列表。 */
   contextWindowOptions?: readonly number[]
+  /** 上游真实支持的模态（未经掩码）。 */
+  upstreamInput?: readonly string[]
   maxTokens: number
   input: readonly string[]
   reasoning: boolean
@@ -278,6 +288,9 @@ export function toStatusModels(models: readonly MiniMaxStatusModelSpec[]): MiniM
     ...model.contextWindowOptions === undefined
       ? {}
       : { contextWindowOptions: [...model.contextWindowOptions] },
+    ...model.upstreamInput === undefined
+      ? {}
+      : { upstreamInput: [...model.upstreamInput] },
     maxTokens: model.maxTokens,
     thinkingMode: model.thinkingMode,
     input: [...model.input],
