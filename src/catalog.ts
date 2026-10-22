@@ -182,7 +182,7 @@ const FORCED = { ...MINIMAX_EFFORT_LEVELS, off: null } as const
 export const MINIMAX_MODELS: readonly MiniMaxModelSpec[] = [
   {
     id: 'MiniMax-M3.1-Flash',
-    name: 'M3.1-Flash（订阅限免）',
+    name: 'M3.1-Flash',
     badge: '订阅限免',
     description: '订阅期内不计费；强制思考，不提供“关闭思考”档。',
     contextWindow: 512_000,

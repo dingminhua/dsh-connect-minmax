@@ -50,8 +50,9 @@ describe('MINIMAX_MODELS', () => {
     ])
   })
 
-  it('显示名对齐 MiniMax Code（不带 MiniMax- 前缀，订阅限免带角标）', () => {
-    expect(byId('MiniMax-M3.1-Flash').name).toBe('M3.1-Flash（订阅限免）')
+  it('显示名对齐 MiniMax Code（不带 MiniMax- 前缀；"订阅限免"只做角标，不重复进名字）', () => {
+    // 名字里再带一次括注会和角标画成两个"订阅限免"（用户实拍过）。
+    expect(byId('MiniMax-M3.1-Flash').name).toBe('M3.1-Flash')
     expect(byId('MiniMax-M3.1-Flash').badge).toBe('订阅限免')
     expect(byId('MiniMax-M3').name).toBe('M3')
     expect(byId('MiniMax-M2.7').name).toBe('M2.7')

@@ -680,3 +680,12 @@ describe('模型页与 Qoder 同款的信息位', () => {
     expect(container.innerHTML).toContain('models.capabilityNote')
   })
 })
+
+describe('模型行文案', () => {
+  it('图片复选框旁边的文字是「图片」，不是「支持」', async () => {
+    // 「支持」在勾选框旁读起来像在描述能力清单，看不出这一项说的是图片。
+    const zh = (await import('../src/client/locales.ts')).zh as Record<string, string>
+    expect(zh['models.imageYes']).toBe('图片')
+    expect(zh['models.imageNo']).toBe('无图片')
+  })
+})
