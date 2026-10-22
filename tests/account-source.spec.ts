@@ -1,12 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { writeAccounts, readAccounts, syncLiveAccount } from '../src/accounts.ts'
 import { MiniMaxAccountSource, MiniMaxAccountUnavailableError, resetAccountInflight } from '../src/account-source.ts'
 
-/** 每个用例一个临时 DSH_HOME，避免互相踩。 */
+/** 每个用例一个临时 DSH_HOME；用例结束后恢复，绝不留下真实路径。 */
+const homes: string[] = []
+const originalHome = process.env['DSH_HOME']
+
 async function isolateHome(): Promise<string> {
   const fs = await import('node:fs/promises')
   const dir = await fs.mkdtemp('/tmp/mm-acct-')
+  homes.push(dir)
   process.env['DSH_HOME'] = dir
   return dir
 }
@@ -31,6 +35,13 @@ async function seed(overrides: Record<string, unknown> = {}): Promise<void> {
   const fs = await import('node:fs/promises')
   await fs.writeFile(`${process.env['DSH_HOME']}/.minimax-accounts.json`, JSON.stringify(base))
 }
+
+afterAll(async () => {
+  if (originalHome === undefined) delete process.env['DSH_HOME']
+  else process.env['DSH_HOME'] = originalHome
+  const fs = await import('node:fs/promises')
+  await Promise.all(homes.map(dir => fs.rm(dir, { recursive: true, force: true })))
+})
 
 describe('MiniMaxAccountSource', () => {
   beforeEach(() => {
